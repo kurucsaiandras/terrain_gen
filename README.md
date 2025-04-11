@@ -4,6 +4,6 @@ This repo contains the code of the project work for the course Generative Method
 
 ## TODO
 Try out different methods for terrain generation
- - GANs and real-world data (**Valdemaar**)
+ - GANs and real-world data (**Valdemar**)
  - Diffusion Limited Aggregation (**Andras**)
  - Noise and erosion (**Lucas**)
