@@ -6,8 +6,9 @@ model:
 
 train:
   name: "debug"
-  save_frequency: 100
+  save_frequency: 10
+  resume: False
   batch_size: 32
   gp_weight: 10.0
   discriminator_iters: 1
-  epochs: 100
+  epochs: 20

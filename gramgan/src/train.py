@@ -1,3 +1,4 @@
+from pathlib import Path
 
 import torch
 import hydra
@@ -77,56 +78,125 @@ def discriminator_iter(
 
     optimizer.step()
 
+def save_train_state(
+    save_dir: Path,
+    generator: Generator,
+    discriminator: Discriminator,
+    optimizer_g: torch.optim.Optimizer,
+    optimizer_d: torch.optim.Optimizer,
+    epoch: int | None = None,
+):
+    torch.save({
+        "generator": generator.state_dict(),
+        "discriminator": discriminator.state_dict(),
+        "optimizer_g": optimizer_g.state_dict(),
+        "optimizer_d": optimizer_d.state_dict()
+    }, save_dir / f"train_state_{epoch}.pt")
+
+def load_train_state(
+    save_dir: Path,
+    generator: Generator,
+    discriminator: Discriminator,
+    optimizer_g: torch.optim.Optimizer,
+    optimizer_d: torch.optim.Optimizer,
+    epoch: int,
+):
+    dict = torch.load(save_dir / f"train_state_{epoch}.pt")
+
+    generator.load_state_dict(dict["generator"])
+    discriminator.load_state_dict(dict["discriminator"])
+    optimizer_g.load_state_dict(dict["optimizer_g"])
+    optimizer_d.load_state_dict(dict["optimizer_d"])
+    
+def find_latest_epoch(save_dir: Path) -> int | None:
+    save_files = sorted(save_dir.glob("train_state_*.pt"))
+    if not save_files:
+        return None
+    latest = save_files[-1]
+
+    assert latest.is_file()
+    return int(latest.stem[12:])
 
 @hydra.main(version_base=None, config_path="..", config_name="config")
 def train(cfg: DictConfig):
     torch.manual_seed(1234)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 
-    height_map = RealHeightMap(device=device) 
+    save_dir: Path = Path("models") / cfg.train.name
+    save_dir.mkdir(parents=True, exist_ok=True)
 
+    height_map = RealHeightMap(device=device) 
+    
     generator = Generator(cfg.model.hidden_features, cfg.model.noise_features).to(device)
     discriminator = Discriminator().to(device)
     
     optimizer_g = torch.optim.Adam(generator.parameters(), lr=1e-3)
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-3)
 
-    for epoch in range(cfg.train.epochs):
+    epoch_range = range(cfg.train.epochs)
+
+    if cfg.train.resume:
+        start_epoch = find_latest_epoch(save_dir)
+        if start_epoch is not None:
+            epoch_range = range(start_epoch, start_epoch + cfg.train.epochs)
+            load_train_state(
+                save_dir,
+                generator,
+                discriminator,
+                optimizer_g,
+                optimizer_d,
+                start_epoch,
+            )
+
+    for epoch in epoch_range:
 
         if epoch % cfg.train.save_frequency == 0:
-            torch.save(generator.state_dict(), f"models/generator_{cfg.train.name}_{epoch}.pt")
-            torch.save(discriminator.state_dict(), f"models/discriminator_{cfg.train.name}_{epoch}.pt")
+            save_train_state(
+                save_dir,
+                generator,
+                discriminator,
+                optimizer_g,
+                optimizer_d,
+                epoch=epoch,
+            )
 
+        # disable gradient computation for generator
         for p in generator.parameters():
             p.requires_grad = False
 
         for _ in range(cfg.train.discriminator_iters):
             discriminator_iter(generator, discriminator, height_map, optimizer_d, cfg, device)
         
+        # reenable gradient computation for generator
         for p in generator.parameters():
             p.requires_grad = True
 
-
+        # disable gradient computation for discriminator
         for p in discriminator.parameters():
             p.requires_grad = False
 
         generator.zero_grad()
     
         noise = noise_image(cfg, device=device)
-        patches = generator(noise, random_patch_coords(cfg, device))
+        patches: torch.Tensor = generator(noise, random_patch_coords(cfg, device))
         patches = patches.permute([0, 3, 1, 2])
         loss: torch.Tensor = -discriminator(patches).mean()
         loss.backward()
 
         optimizer_g.step()
         
+        # reenable gradient computation for discriminator
         for p in discriminator.parameters():
             p.requires_grad = True
 
-
-    torch.save(generator.state_dict(), f"models/generator_{cfg.train.name}.pt")
-    torch.save(discriminator.state_dict(), f"models/discriminator_{cfg.train.name}.pt")
-    
+    save_train_state(
+        save_dir,
+        generator,
+        discriminator,
+        optimizer_g,
+        optimizer_d,
+        epoch=epoch_range.stop,
+    )
 
 if __name__ == "__main__":
     train()

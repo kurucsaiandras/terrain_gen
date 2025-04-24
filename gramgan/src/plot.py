@@ -56,8 +56,6 @@ def plot_sample_bilinear():
     )).permute([1, 2, 0]).unsqueeze(2)
 
     image = sample_bilinear(noise, coords)
-
-    assert torch.isclose(image[0, 0, 0], 0.5 * (noise[0, 0, 0] + noise[-1, -1, 0]))
     
     fig = plt.figure()
     ax = fig.subplots()

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 def sample_bilinear(image: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
@@ -121,50 +122,38 @@ class Generator(nn.Module):
 
         return self.tail(x)
 
-class Discriminator(nn.Sequential):
+
+class Discriminator(nn.Module):
     def __init__(self):
-        super().__init__(
-            # [1, 128, 128]
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[64, 64, 64]
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[128, 32, 32]
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[128, 16, 16]
+        super().__init__()
+
+        self.convs = nn.ModuleList([
+            nn.Conv2d(  1,  32, 3, padding=1),
+            nn.Conv2d( 32,  64, 3, padding=1),
+            nn.Conv2d( 64, 128, 3, padding=1),
             nn.Conv2d(128, 256, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[256, 8, 8]
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[256, 4, 4]
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[256, 2, 2]
-            nn.Conv2d(256, 256, 2, padding=1),
-            nn.LeakyReLU(),
-            nn.AvgPool2d(2),
-            #[256, 1, 1]
+            nn.Conv2d(256, 512, 3, padding=1),
+            nn.Conv2d(512, 512, 3, padding=1),
+            nn.Conv2d(512, 512, 3, padding=1),
+        ])
+
+        self.tail = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(256, 512),
+            nn.Linear(512, 512),
             nn.LeakyReLU(),
             nn.Linear(512, 1),
         )
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.extracted_features = []
 
+        for conv in self.convs:
+            x = conv(x)
+            x = F.leaky_relu(x)
+            self.extracted_features.append(x)
+            x = F.avg_pool2d(x, 2)
 
+        return self.tail(x)
 
 
 
