@@ -1,0 +1,15 @@
+#output files
+outputs/*
+models/*
+!models/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# caches
+src/__pycache__
+
+# submit scripts
+submit_train.sh
+
+# data
+exemplars/yosemite.tif
