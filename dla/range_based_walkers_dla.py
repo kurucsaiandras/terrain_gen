@@ -5,14 +5,14 @@ from PIL import Image
 class RangeBasedWalkersDla:
     def __init__(self, size=64, start_pos=(31, 31), allow_diagonals=False, range_step=2, num_of_walkers=1):
         self.size = size
-        self.grid = np.zeros((size, size), dtype=int)
+        self.grid = np.zeros((size, size), dtype=float)
         self.start_pos = np.array(start_pos)
         self.grid[start_pos] = 1
         if allow_diagonals:
             self.directions = np.array([[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [-1, -1], [1, -1], [-1, 1]])
         else:
             self.directions = np.array([[0, 1], [1, 0], [0, -1], [-1, 0]])
-        self.connected_pairs = [] # Tree structure to store connected pairs
+        #self.connected_pairs = [] # Tree structure to store connected pairs
         self.current_range = range_step
         self.range_step = range_step
         angles = np.random.uniform(0, 2 * np.pi, num_of_walkers)
@@ -53,7 +53,7 @@ class RangeBasedWalkersDla:
         for d in self.directions:
             neighbor = pos + d
             if 0 <= neighbor[0] < self.size and 0 <= neighbor[1] < self.size:
-                if self.grid[tuple(neighbor)] == 1:
+                if self.grid[tuple(neighbor)] != 0:
                     neighbors.append(neighbor)
         return np.array(neighbors)
 
@@ -69,9 +69,9 @@ class RangeBasedWalkersDla:
                 # Randomly select a neighbor
                 neighbor = neighbors[np.random.choice(len(neighbors))]
                 # Connect the tile to the neighbor
-                self.connected_pairs.append((tuple(neighbor), tuple(tile)))
+                #self.connected_pairs.append((tuple(neighbor), tuple(tile)))
                 # Add the tile to the grid
-                self.grid[tuple(tile)] = 1 #self.grid[tuple(neighbor)] + 1
+                self.grid[tuple(tile)] = self.grid[tuple(neighbor)] + 1
                 # Check if we need to increase the range
                 if not self.is_in_range(tile, threshold=2):
                     self.expand_range()
@@ -86,8 +86,12 @@ class RangeBasedWalkersDla:
     def generate(self, filename=None):
         while self.step():
             pass
-        self.grid *= 255
-        self.grid = self.grid.astype(np.uint8)
+        mask = self.grid > 0
+        self.grid[mask] = (self.grid.max() + 1 - self.grid[mask]) / self.grid.max() # values between 0 and 1
+        # smooth falloff
+        rate = 5
+        self.grid[mask] = (1 - 1 / (1 + rate * self.grid[mask])) / self.grid.max() # values between 0 and 1
+        self.grid = np.round(self.grid * 255).astype(np.uint8)
         if filename:
             output_dir = f"results/dla"
             os.makedirs(output_dir, exist_ok=True)

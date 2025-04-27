@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 from PIL import Image
 
 # Load image
-img = Image.open('../dla/results/terrain/terrain.png').convert('L')
+img = Image.open('../dla/results/terrain/terrain_blurred.png').convert('L')
 Z = np.array(img)
 
 # Create x and y coordinates
@@ -16,17 +16,18 @@ fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='gray')])
 
 # Customize the layout a bit (optional)
 fig.update_layout(
-    title='Grayscale Image as 3D Surface',
+    title='Terrain Surface',
     autosize=True,
     width=800,
     height=800,
     margin=dict(l=0, r=0, b=0, t=30),
     scene=dict(
-        zaxis=dict(title='Pixel Intensity'),
+        zaxis=dict(title='Height'),
         xaxis=dict(title='X'),
-        yaxis=dict(title='Y')
+        yaxis=dict(title='Y'),
+        aspectratio=dict(x=1, y=1, z=0.2)
     )
 )
 
 # Save the figure
-fig.write_html('surface_plot.html')
+fig.show()

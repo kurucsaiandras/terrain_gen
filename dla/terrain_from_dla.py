@@ -19,12 +19,13 @@ def save_terrain(terrain, filename):
     img = Image.fromarray(terrain, mode='L')
     img.save(f"{output_dir}/{filename}.png")
 
-generate = True
+generate = False
 if generate:
-    dla = RangeBasedWalkersDla(size=512, start_pos=(255, 255), allow_diagonals=False)
-    dla_map = dla.generate("raw_grid_large")
+    SIZE = 128
+    dla = RangeBasedWalkersDla(size=SIZE, start_pos=(SIZE//2, SIZE//2), allow_diagonals=False)
+    dla_map = dla.generate("raw_grid_falloff")
 else:
-    dla_map = np.array(Image.open('results/dla/raw_grid_large.png').convert('L'))
+    dla_map = np.array(Image.open('results/dla/raw_grid_falloff.png').convert('L'))
 
-terrain = multi_scale_blur(dla_map.astype(np.float64), 20, 1)
-save_terrain(terrain, "terrain_large")
+terrain = multi_scale_blur(dla_map.astype(np.float64), 100, 1)
+save_terrain(terrain, "terrain_blurred")
