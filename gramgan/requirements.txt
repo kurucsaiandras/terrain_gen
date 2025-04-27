@@ -1,0 +1,6 @@
+# core requirements
+torch == 2.6
+torchvision == 2.6
+rasterio == 1.4
+matplotlib == 3.10
+hydra-core == 1.3

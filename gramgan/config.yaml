@@ -1,0 +1,14 @@
+model: 
+  noise_res: 64
+  noise_features: 16
+  hidden_features: 128
+  image_res: 128
+
+train:
+  name: "debug"
+  save_frequency: 10
+  resume: False
+  batch_size: 32
+  gp_weight: 10.0
+  discriminator_iters: 1
+  epochs: 20
