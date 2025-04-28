@@ -1,7 +1,29 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+
+def sos_noise_basis(features: int, n: int, sigma: float = 1.0, device = None) -> tuple[torch.Tensor]:
+
+    chis = torch.randn(features, n, device=device)
+    scales = 3.0 * sigma + chis
+    angles = 2.0 * torch.pi * torch.arange(0, n, dtype=torch.float32, device=device) / n
+
+    frequencies = torch.empty(features, n, 2, device=device)
+    frequencies[:,:,0] = scales * torch.cos(angles)
+    frequencies[:,:,1] = scales * torch.sin(angles)
+    phase_shifts = 2.0 * torch.pi * torch.rand(features, n, device=device)
+    weights = torch.exp(-(chis * chis) / (sigma * sigma))
+
+    return frequencies, phase_shifts, weights
+
+def sos_noise(basis: tuple[torch.Tensor], coords: torch.Tensor) -> torch.Tensor:
+    """
+    :param basis: parameters for basis functions [features, n, 4]
+    :param coords: coordinates to evaluate at [..., features, 2]
+    """
+    frequencies, phase_shifts, weights = basis
+    angles = torch.einsum('...fi,fni->...fn', coords, frequencies) + phase_shifts
+    return torch.sum(weights * torch.sin(angles), dim=-1)
 
 def sample_bilinear(image: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """
@@ -50,10 +72,17 @@ class NoiseTransforms(nn.Module):
     def __init__(self, noise_features: int):
         super().__init__()
         self.noise_features = noise_features
+        
+        angles = 2.0 * torch.pi * torch.rand(noise_features)
 
-        transformations_init = torch.randn(noise_features, 2, 2) * 0.05
+        transformations_init = torch.empty(noise_features, 2, 2)
+        transformations_init[:,0,0] = torch.cos(angles)
+        transformations_init[:,0,1] = -torch.sin(angles)
+        transformations_init[:,1,1] = torch.cos(angles)
+        transformations_init[:,1,0] = torch.sin(angles)
+        
         for i in range(noise_features):
-            transformations_init[i,:,:] *= 2.0 ** i
+            transformations_init[i,:,:] *= 0.25 * 2.0 ** (0.5 * i)
 
         self.transformations = nn.Parameter(transformations_init)
 
@@ -89,7 +118,7 @@ class GeneratorLayer(nn.Module):
 
 class Generator(nn.Module):
     
-    def __init__(self, hidden_features: int, noise_features: int):
+    def __init__(self, hidden_features: int, noise_features: int, out_features: int):
         super().__init__()
         self.input = nn.Parameter(torch.ones(hidden_features))
         self.noise_transforms = NoiseTransforms(noise_features)
@@ -101,14 +130,14 @@ class Generator(nn.Module):
         self.tail = nn.Sequential(
             nn.Linear(hidden_features, hidden_features),
             nn.LeakyReLU(),
-            nn.Linear(hidden_features, 1),
+            nn.Linear(hidden_features, out_features),
         )
 
     def forward(self, noise: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
         """
         :param noise: gaussian noise [noise_features, noise_res, noise_res]
         :param coords: coordinates of sampled points [..., 2]
-        :return: height [..., 1] 
+        :return: height [..., out_features] 
         """
         
         noise_coords = self.noise_transforms(coords)
@@ -124,11 +153,11 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, image_features: int):
         super().__init__()
 
         self.convs = nn.ModuleList([
-            nn.Conv2d(  1,  32, 3, padding=1),
+            nn.Conv2d(image_features, 32, 3, padding=1),
             nn.Conv2d( 32,  64, 3, padding=1),
             nn.Conv2d( 64, 128, 3, padding=1),
             nn.Conv2d(128, 256, 3, padding=1),
@@ -144,17 +173,45 @@ class Discriminator(nn.Module):
             nn.Linear(512, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        self.extracted_features = []
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        extracted_features = []
 
         for conv in self.convs:
             x = conv(x)
             x = F.leaky_relu(x)
-            self.extracted_features.append(x)
+            extracted_features.append(x)
             x = F.avg_pool2d(x, 2)
 
-        return self.tail(x)
+        x = F.adaptive_avg_pool2d(x, output_size=1)
 
+        return self.tail(x), extracted_features
 
+if __name__ == "__main__":
+    torch.manual_seed(1234)
+    device = torch.device("cuda")
 
+    import matplotlib.pyplot as plt
+    
+    noise_transforms = NoiseTransforms(16).to(device)
+    
+    basis = sos_noise_basis(16, 90, device=device)
+    coords = torch.stack(torch.meshgrid(
+        torch.linspace(0.0, 1.0, 64, device=device),
+        torch.linspace(0.0, 1.0, 64, device=device),
+        indexing='xy',
+    )).permute([1, 2, 0])
+
+    transformed_coords = noise_transforms(coords)
+    output = sos_noise(basis, transformed_coords)
+
+    absmax = torch.max(torch.abs(output))
+    
+    fig = plt.figure()
+    ax = fig.subplots(4, 4)
+    for i in range(4):
+        for j in range(4):
+            idx = i * 4 + j
+            ax[i, j].imshow(output[...,idx].detach().cpu().numpy(), vmin=-absmax, vmax=absmax)
+    fig.tight_layout()
+    fig.savefig(f"reports/sos_noise.pdf")
 
