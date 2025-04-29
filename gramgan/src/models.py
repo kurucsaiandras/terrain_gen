@@ -20,6 +20,7 @@ def sos_noise(basis: tuple[torch.Tensor], coords: torch.Tensor) -> torch.Tensor:
     """
     :param basis: parameters for basis functions [features, n, 4]
     :param coords: coordinates to evaluate at [..., features, 2]
+    :return: noise evaluated at coordinates [..., features]
     """
     frequencies, phase_shifts, weights = basis
     angles = torch.einsum('...fi,fni->...fn', coords, frequencies) + phase_shifts
@@ -75,16 +76,24 @@ class NoiseTransforms(nn.Module):
         
         angles = 2.0 * torch.pi * torch.rand(noise_features)
 
-        transformations_init = torch.empty(noise_features, 2, 2)
-        transformations_init[:,0,0] = torch.cos(angles)
-        transformations_init[:,0,1] = -torch.sin(angles)
-        transformations_init[:,1,1] = torch.cos(angles)
-        transformations_init[:,1,0] = torch.sin(angles)
+        rotations = torch.empty(noise_features, 2, 2)
+        rotations[:,0,0] = torch.cos(angles)
+        rotations[:,0,1] = torch.sin(angles)
+        rotations[:,1,0] = -torch.sin(angles)
+        rotations[:,1,1] = torch.cos(angles)
         
-        for i in range(noise_features):
-            transformations_init[i,:,:] *= 0.25 * 2.0 ** (0.5 * i)
+        shears = torch.empty(noise_features, 2, 2)
+        shears[:,0,0] = 1.0
+        shears[:,0,1] = 0.0
+        shears[:,1,0] = torch.randn(noise_features)
+        shears[:,1,1] = 1.0
 
-        self.transformations = nn.Parameter(transformations_init)
+        transforms = torch.matmul(rotations, shears)
+
+        for i in range(noise_features):
+            transforms[i,:,:] *= 0.25 * 2.0 ** (0.5 * i)
+
+        self.transformations = nn.Parameter(transforms)
 
     def forward(self, coords: torch.Tensor) -> torch.Tensor:
         """
