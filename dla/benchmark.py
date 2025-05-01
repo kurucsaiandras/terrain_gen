@@ -1,6 +1,7 @@
 from dynamic_scale_dla import DynamicScaleDla
 from range_based_dla import RangeBasedDla
 from range_based_walkers_dla_jit import RangeBasedWalkersDlaJit
+from range_based_walkers_dla import RangeBasedWalkersDla
 import time
 import matplotlib.pyplot as plt
 import os
@@ -25,12 +26,20 @@ def run_range_based_dla(size=64, start_pos=(31, 31), allow_diagonals=False, rang
     elapsed_time = end_time - start_time
     return terrain.grid, elapsed_time
 
+def run_range_based_walkers_dla(size=64, start_pos=(31, 31), allow_diagonals=False, range_step=2, num_of_walkers=1):
+    terrain = RangeBasedWalkersDla(size=size, start_pos=start_pos, allow_diagonals=allow_diagonals, range_step=range_step, num_of_walkers=num_of_walkers)
+    # measure time
+    start_time = time.time()
+    terrain.generate()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    return terrain.grid, elapsed_time
+
 def run_range_based_walkers_dla_jit(size=64, start_pos=(31, 31), allow_diagonals=False, range_step=2, num_of_walkers=1):
     terrain = RangeBasedWalkersDlaJit(size=size, start_pos=start_pos, allow_diagonals=allow_diagonals, range_step=range_step, num_of_walkers=num_of_walkers)
     # measure time
     start_time = time.time()
-    while terrain.step():
-        pass
+    terrain.generate()
     end_time = time.time()
     elapsed_time = end_time - start_time
     return terrain.grid, elapsed_time
@@ -80,14 +89,14 @@ def main():
 
     #results, elapsed_times = [], []
 
-    #for i in range(NUM_OF_RUNS):
-    #    grid, elapsed_time = run_range_based_dla(size=END_SIZE, start_pos=(END_SIZE // 2, END_SIZE // 2), allow_diagonals=ALLOW_DIAGONALS, range_step=2)
-    #    results.append(grid)
-    #    elapsed_times.append(elapsed_time)
+    for i in range(NUM_OF_RUNS):
+        grid, elapsed_time = run_range_based_walkers_dla(size=END_SIZE, start_pos=(END_SIZE // 2, END_SIZE // 2), allow_diagonals=ALLOW_DIAGONALS, range_step=2, num_of_walkers=1)
+        results.append(grid)
+        elapsed_times.append(elapsed_time)
 
-    #plot_results(results, elapsed_times, "range_based_dla_diag", END_SIZE)
+    plot_results(results, elapsed_times, "range_based_walkers_dla", END_SIZE)
 
-    #results, elapsed_times = [], []
+    results, elapsed_times = [], []
 
     for i in range(NUM_OF_RUNS):
         grid, elapsed_time = run_range_based_walkers_dla_jit(size=END_SIZE, start_pos=(END_SIZE // 2, END_SIZE // 2), allow_diagonals=ALLOW_DIAGONALS, range_step=2, num_of_walkers=1)

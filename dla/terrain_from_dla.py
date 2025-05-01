@@ -1,5 +1,5 @@
 from scipy.ndimage import gaussian_filter
-from range_based_walkers_dla import RangeBasedWalkersDla
+from masked_dla import MaskedDla
 import numpy as np
 from PIL import Image
 import os
@@ -19,13 +19,14 @@ def save_terrain(terrain, filename):
     img = Image.fromarray(terrain, mode='L')
     img.save(f"{output_dir}/{filename}.png")
 
-generate = False
+generate = True
 if generate:
     SIZE = 128
-    dla = RangeBasedWalkersDla(size=SIZE, start_pos=(SIZE//2, SIZE//2), allow_diagonals=False)
-    dla_map = dla.generate("raw_grid_falloff")
+    mask = np.array(Image.open('data/mask.png').convert('L'))
+    dla = MaskedDla(size=SIZE, start_pos=(100, 50), mask=mask, allow_diagonals=False, num_of_walkers=10, max_filled=0.25)
+    dla_map = dla.generate("raw_grid_masked")
 else:
-    dla_map = np.array(Image.open('results/dla/raw_grid_falloff.png').convert('L'))
+    dla_map = np.array(Image.open('results/dla/raw_grid_masked.png').convert('L'))
 
-terrain = multi_scale_blur(dla_map.astype(np.float64), 100, 1)
-save_terrain(terrain, "terrain_blurred")
+terrain = multi_scale_blur(dla_map.astype(np.float64), 50, 1)
+save_terrain(terrain, "masked_terrain_blurred")
