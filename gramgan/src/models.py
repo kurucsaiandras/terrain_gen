@@ -1,7 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+
+class Noise(nn.Module):
+   
+    def __init__(self, features: int, resolution: int, device = None):
+        super().__init__()
+
+        self.image = torch.randn(features, resolution, resolution, device=device)
+
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        return sample_bilinear(self.image, coords)
 
 def sample_bilinear(image: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """
@@ -50,12 +60,27 @@ class NoiseTransforms(nn.Module):
     def __init__(self, noise_features: int):
         super().__init__()
         self.noise_features = noise_features
+        
+        angles = 2.0 * torch.pi * torch.rand(noise_features)
 
-        transformations_init = torch.randn(noise_features, 2, 2) * 0.05
+        rotations = torch.empty(noise_features, 2, 2)
+        rotations[:,0,0] = torch.cos(angles)
+        rotations[:,0,1] = torch.sin(angles)
+        rotations[:,1,0] = -torch.sin(angles)
+        rotations[:,1,1] = torch.cos(angles)
+        
+        shears = torch.empty(noise_features, 2, 2)
+        shears[:,0,0] = 1.0
+        shears[:,0,1] = 0.0
+        shears[:,1,0] = torch.randn(noise_features)
+        shears[:,1,1] = 1.0
+
+        transforms = torch.matmul(rotations, shears)
+
         for i in range(noise_features):
-            transformations_init[i,:,:] *= 2.0 ** i
+            transforms[i,:,:] *= 0.25 * 2.0 ** (0.5 * i)
 
-        self.transformations = nn.Parameter(transformations_init)
+        self.transformations = nn.Parameter(transforms)
 
     def forward(self, coords: torch.Tensor) -> torch.Tensor:
         """
@@ -89,7 +114,7 @@ class GeneratorLayer(nn.Module):
 
 class Generator(nn.Module):
     
-    def __init__(self, hidden_features: int, noise_features: int):
+    def __init__(self, hidden_features: int, noise_features: int, out_features: int):
         super().__init__()
         self.input = nn.Parameter(torch.ones(hidden_features))
         self.noise_transforms = NoiseTransforms(noise_features)
@@ -101,18 +126,18 @@ class Generator(nn.Module):
         self.tail = nn.Sequential(
             nn.Linear(hidden_features, hidden_features),
             nn.LeakyReLU(),
-            nn.Linear(hidden_features, 1),
+            nn.Linear(hidden_features, out_features),
         )
 
-    def forward(self, noise: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
         """
-        :param noise: gaussian noise [noise_features, noise_res, noise_res]
+        :param noise: an instance of the Noise class
         :param coords: coordinates of sampled points [..., 2]
-        :return: height [..., 1] 
+        :return: height [..., out_features] 
         """
         
         noise_coords = self.noise_transforms(coords)
-        noise_values = sample_bilinear(noise, noise_coords)
+        noise_values = noise(noise_coords)
 
         x = self.input
 
@@ -124,11 +149,11 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, image_features: int):
         super().__init__()
 
         self.convs = nn.ModuleList([
-            nn.Conv2d(  1,  32, 3, padding=1),
+            nn.Conv2d(image_features, 32, 3, padding=1),
             nn.Conv2d( 32,  64, 3, padding=1),
             nn.Conv2d( 64, 128, 3, padding=1),
             nn.Conv2d(128, 256, 3, padding=1),
@@ -144,17 +169,15 @@ class Discriminator(nn.Module):
             nn.Linear(512, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        self.extracted_features = []
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        extracted_features = []
 
         for conv in self.convs:
             x = conv(x)
             x = F.leaky_relu(x)
-            self.extracted_features.append(x)
+            extracted_features.append(x)
             x = F.avg_pool2d(x, 2)
 
-        return self.tail(x)
+        x = F.adaptive_avg_pool2d(x, output_size=1)
 
-
-
-
+        return self.tail(x), extracted_features
