@@ -5,7 +5,7 @@ import hydra
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig
 
-from models import Generator, Discriminator, NoiseTransforms, sample_bilinear
+from models import Noise, Generator, Discriminator, NoiseTransforms, sample_bilinear
 from data import RealHeightMap
 from train import find_latest_epoch
 
@@ -26,7 +26,7 @@ def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg
         translations = torch.tensor([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], device=device)
         patch_coords = coords + translations.view([4, 1, 1, 2])
         
-        noise = torch.randn(cfg.model.noise_features, cfg.model.noise_res, cfg.model.noise_res, device=device)
+        noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
         fake_patches = generator(noise, patch_coords)
         fake_patches = fake_patches.permute([0, 3, 1, 2])
         fake_logits, _ = discriminator(fake_patches)
@@ -35,10 +35,10 @@ def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg
 
         for j in range(4):
             axs[0, j].set_title(f"D: {real_logits[j,0]:.2E}")
-            axs[0, j].imshow(real_patches[j,0,:,:].cpu().numpy())
+            axs[0, j].imshow(real_patches[j,0,:,:].cpu().numpy(), vmin=-2.0, vmax=2.0)
             
             axs[1, j].set_title(f"D: {fake_logits[j,0]:.2E}")
-            axs[1, j].imshow(fake_patches[j,0,:,:].detach().cpu().numpy())
+            axs[1, j].imshow(fake_patches[j,0,:,:].detach().cpu().numpy(), vmin=-2.0, vmax=2.0)
 
         fig.savefig(f"reports/height_examples_{cfg.train.name}.pdf")
 
@@ -59,7 +59,7 @@ def plot_sample_bilinear():
 
 def plot_generator_noise_transforms(generator: Generator, cfg: DictConfig, device=None):
     
-    noise = torch.randn(cfg.model.noise_features, cfg.model.noise_res, cfg.model.noise_res, device=device)
+    noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
 
     coords = torch.stack(torch.meshgrid(
         torch.linspace(0.0, 1.0, cfg.model.image_res, device=device),
@@ -68,7 +68,7 @@ def plot_generator_noise_transforms(generator: Generator, cfg: DictConfig, devic
     )).permute([1, 2, 0])
 
     noise_coords = generator.noise_transforms(coords)
-    heights = sample_bilinear(noise, noise_coords)
+    heights = noise(noise_coords)
 
     fig = plt.figure()
     ax = fig.subplots(4, 4)
@@ -81,7 +81,7 @@ def plot_generator_noise_transforms(generator: Generator, cfg: DictConfig, devic
 
 def plot_noise_transforms(cfg: DictConfig, device = None):
     noise_transforms = NoiseTransforms(cfg.model.noise_features).to(device)
-    noise = torch.randn(cfg.model.noise_features, cfg.model.noise_res, cfg.model.noise_res, device=device)
+    noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
 
     coords = torch.stack(torch.meshgrid(
         torch.linspace(0.0, 1.0, cfg.model.image_res, device=device),
@@ -90,7 +90,7 @@ def plot_noise_transforms(cfg: DictConfig, device = None):
     )).permute([1, 2, 0])
 
     noise_coords = noise_transforms(coords)
-    heights = sample_bilinear(noise, noise_coords)
+    heights = noise(noise_coords)
 
     fig = plt.figure()
     ax = fig.subplots(4, 4)

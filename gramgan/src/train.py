@@ -5,11 +5,9 @@ import torch
 import hydra
 from omegaconf import DictConfig
 
-from models import Generator, Discriminator
+from models import Noise, Generator, Discriminator
 from data import RealHeightMap
 
-def noise_image(cfg: DictConfig, device = None) -> torch.Tensor:
-    return torch.randn(cfg.model.noise_features, cfg.model.noise_res, cfg.model.noise_res, device=device)
 
 def random_patch_coords(cfg: DictConfig, device = None) -> torch.Tensor:
     coords = torch.stack(torch.meshgrid(
@@ -46,6 +44,22 @@ def gradient_penalty(
     
     return ((gradients.norm(2, dim=1) - 1.0)**2).mean()
 
+def discriminator_loss(
+    discriminator: Discriminator,
+    real_patches: torch.Tensor,
+    fake_patches: torch.Tensor,
+    cfg: DictConfig,
+) -> torch.Tensor:
+    
+    real_logits, _real_features = discriminator(real_patches)
+    fake_logits, _fake_features = discriminator(fake_patches)
+
+    wgan = fake_logits.mean() - real_logits.mean()
+    gp = gradient_penalty(discriminator, real_patches, fake_patches)
+
+    return wgan + cfg.train.gp_weight * gp 
+
+
 def gram(features: torch.Tensor) -> torch.Tensor:
     """
     :param features: a batch of feature tensors [batch_size, channels, height, width]
@@ -68,38 +82,21 @@ def style_loss(real_features: list[torch.Tensor], fake_features: list[torch.Tens
 
     return total / len(real_features)
 
-def discriminator_iter(
-        generator: Generator,
-        discriminator: Discriminator,
-        height_map: RealHeightMap,
-        optimizer: torch.optim.Optimizer, 
-        cfg: DictConfig,
-        device = None
-):
-    discriminator.zero_grad()
-    discriminator_loss = 0.0
+def generator_loss(
+    discriminator: Discriminator,
+    real_patches: torch.Tensor,
+    fake_patches: torch.Tensor,
+    cfg: DictConfig,
+) -> torch.Tensor:
 
-    noise = noise_image(cfg, device=device)
+    real_logits, real_features = discriminator(real_patches)
+    fake_logits, fake_features = discriminator(fake_patches)
 
-    real_patches = height_map.get_patches(cfg.train.batch_size, cfg.model.image_res)
-    real_logits, _ = discriminator(real_patches)
-    real_loss = -real_logits.mean()
-    real_loss.backward()
-    discriminator_loss += real_loss.item()
+    wgan = -fake_logits.mean()
+    style = style_loss(real_features, fake_features)
 
-    coords = random_patch_coords(cfg, device=device)
-    fake_patches = generator(noise, coords).permute([0, 3, 1, 2])
-    fake_logits, _ = discriminator(fake_patches)
-    fake_loss = fake_logits.mean()
-    fake_loss.backward()
-    discriminator_loss += fake_loss.item()
+    return cfg.train.wgan_weight * wgan + cfg.train.style_weight * style
 
-    penalty = gradient_penalty(discriminator, real_patches, fake_patches)
-    penalty_loss = cfg.train.gp_weight * penalty 
-    penalty_loss.backward()
-    discriminator_loss += penalty_loss.item()
-
-    optimizer.step()
 
 def save_train_state(
     save_dir: Path,
@@ -145,11 +142,11 @@ def train(cfg: DictConfig):
 
     print(f"saving intermediate models to {save_dir}")
 
-    height_map = RealHeightMap(device=device) 
+    height_map = RealHeightMap(cfg.model.image_res, device=device) 
     
     generator = Generator(cfg.model.hidden_features, cfg.model.noise_features, cfg.model.output_features).to(device)
     discriminator = Discriminator(cfg.model.output_features).to(device)
-    
+
     optimizer_g = torch.optim.Adam(generator.parameters(), lr=1e-3)
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-3)
 
@@ -184,40 +181,30 @@ def train(cfg: DictConfig):
                 epoch=epoch,
             )
 
-        # disable gradient computation for generator
-        for p in generator.parameters():
-            p.requires_grad = False
+        discriminator.zero_grad()
+        generator.zero_grad()
 
-        for _ in range(cfg.train.discriminator_iters):
-            discriminator_iter(generator, discriminator, height_map, optimizer_d, cfg, device)
-        
-        # reenable gradient computation for generator
-        for p in generator.parameters():
-            p.requires_grad = True
+        real_patches = height_map.get_patches(cfg.train.batch_size)
+        noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
+        fake_patches = generator(noise, random_patch_coords(cfg, device=device))
+        fake_patches = fake_patches.permute([0, 3, 1, 2])
+
+        # detach fake patches to avoid computing generator gradients here
+        loss_d = discriminator_loss(discriminator, real_patches, fake_patches.detach(), cfg)
+        loss_d.backward()
+        optimizer_d.step()
 
         # disable gradient computation for discriminator
+        discriminator.eval()
         for p in discriminator.parameters():
             p.requires_grad = False
 
-        generator.zero_grad()
-    
-        real_patches = height_map.get_patches(cfg.train.batch_size, cfg.model.image_res)
-        _, real_features = discriminator(real_patches)
-
-        noise = noise_image(cfg, device=device)
-        patches: torch.Tensor = generator(noise, random_patch_coords(cfg, device))
-        patches = patches.permute([0, 3, 1, 2])
-        logits, features = discriminator(patches)
-        
-        wgan = -logits.mean()
-        style = style_loss(real_features, features)
-
-        loss = cfg.train.wgan_weight * wgan + cfg.train.style_weight * style
-        loss.backward()
-
+        loss_g = generator_loss(discriminator, real_patches, fake_patches, cfg)
+        loss_g.backward()
         optimizer_g.step()
         
         # reenable gradient computation for discriminator
+        discriminator.train()
         for p in discriminator.parameters():
             p.requires_grad = True
 

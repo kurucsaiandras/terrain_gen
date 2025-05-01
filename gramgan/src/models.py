@@ -2,29 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-def sos_noise_basis(features: int, n: int, sigma: float = 1.0, device = None) -> tuple[torch.Tensor]:
+class Noise(nn.Module):
+   
+    def __init__(self, features: int, resolution: int, device = None):
+        super().__init__()
 
-    chis = torch.randn(features, n, device=device)
-    scales = 3.0 * sigma + chis
-    angles = 2.0 * torch.pi * torch.arange(0, n, dtype=torch.float32, device=device) / n
+        self.image = torch.randn(features, resolution, resolution, device=device)
 
-    frequencies = torch.empty(features, n, 2, device=device)
-    frequencies[:,:,0] = scales * torch.cos(angles)
-    frequencies[:,:,1] = scales * torch.sin(angles)
-    phase_shifts = 2.0 * torch.pi * torch.rand(features, n, device=device)
-    weights = torch.exp(-(chis * chis) / (sigma * sigma))
 
-    return frequencies, phase_shifts, weights
-
-def sos_noise(basis: tuple[torch.Tensor], coords: torch.Tensor) -> torch.Tensor:
-    """
-    :param basis: parameters for basis functions [features, n, 4]
-    :param coords: coordinates to evaluate at [..., features, 2]
-    :return: noise evaluated at coordinates [..., features]
-    """
-    frequencies, phase_shifts, weights = basis
-    angles = torch.einsum('...fi,fni->...fn', coords, frequencies) + phase_shifts
-    return torch.sum(weights * torch.sin(angles), dim=-1)
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        return sample_bilinear(self.image, coords)
 
 def sample_bilinear(image: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """
@@ -142,15 +129,15 @@ class Generator(nn.Module):
             nn.Linear(hidden_features, out_features),
         )
 
-    def forward(self, noise: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
         """
-        :param noise: gaussian noise [noise_features, noise_res, noise_res]
+        :param noise: an instance of the Noise class
         :param coords: coordinates of sampled points [..., 2]
         :return: height [..., out_features] 
         """
         
         noise_coords = self.noise_transforms(coords)
-        noise_values = sample_bilinear(noise, noise_coords)
+        noise_values = noise(noise_coords)
 
         x = self.input
 
@@ -194,33 +181,3 @@ class Discriminator(nn.Module):
         x = F.adaptive_avg_pool2d(x, output_size=1)
 
         return self.tail(x), extracted_features
-
-if __name__ == "__main__":
-    torch.manual_seed(1234)
-    device = torch.device("cuda")
-
-    import matplotlib.pyplot as plt
-    
-    noise_transforms = NoiseTransforms(16).to(device)
-    
-    basis = sos_noise_basis(16, 90, device=device)
-    coords = torch.stack(torch.meshgrid(
-        torch.linspace(0.0, 1.0, 64, device=device),
-        torch.linspace(0.0, 1.0, 64, device=device),
-        indexing='xy',
-    )).permute([1, 2, 0])
-
-    transformed_coords = noise_transforms(coords)
-    output = sos_noise(basis, transformed_coords)
-
-    absmax = torch.max(torch.abs(output))
-    
-    fig = plt.figure()
-    ax = fig.subplots(4, 4)
-    for i in range(4):
-        for j in range(4):
-            idx = i * 4 + j
-            ax[i, j].imshow(output[...,idx].detach().cpu().numpy(), vmin=-absmax, vmax=absmax)
-    fig.tight_layout()
-    fig.savefig(f"reports/sos_noise.pdf")
-
