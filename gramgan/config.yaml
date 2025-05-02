@@ -15,3 +15,5 @@ train:
   wgan_weight: 0.1
   discriminator_iters: 1
   epochs: 20
+  discriminator_lr: 2e-3
+  generator_lr: 5e-4

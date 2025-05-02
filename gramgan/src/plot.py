@@ -12,11 +12,11 @@ from train import find_latest_epoch
 def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg: DictConfig, device=None):
     torch.manual_seed(1234)
 
-    height_map = RealHeightMap(device=device) 
+    height_map = RealHeightMap(cfg.model.image_res, device=device) 
 
     with torch.no_grad():
-        real_patches = height_map.get_patches(cfg.train.batch_size, cfg.model.image_res).to(device)
-        real_logits, _ = discriminator(real_patches)
+        real_patches, conditions = height_map.get_batch(4)
+        real_logits, _ = discriminator(conditions, real_patches)
 
         coords = torch.stack(torch.meshgrid(
             torch.linspace(0.0, 1.0, cfg.model.image_res, device=device),
@@ -27,18 +27,20 @@ def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg
         patch_coords = coords + translations.view([4, 1, 1, 2])
         
         noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
-        fake_patches = generator(noise, patch_coords)
+        fake_patches = generator(conditions, noise, patch_coords)
         fake_patches = fake_patches.permute([0, 3, 1, 2])
-        fake_logits, _ = discriminator(fake_patches)
+        fake_logits, _ = discriminator(conditions, fake_patches)
 
         fig, axs = plt.subplots(2, 4)
 
         for j in range(4):
             axs[0, j].set_title(f"D: {real_logits[j,0]:.2E}")
-            axs[0, j].imshow(real_patches[j,0,:,:].cpu().numpy(), vmin=-2.0, vmax=2.0)
-            
+            axs[0, j].imshow(real_patches[j,0,:,:].cpu().numpy(), vmin=height_map.vmin, vmax=height_map.vmax)
+            axs[0, j].axis('off')
+
             axs[1, j].set_title(f"D: {fake_logits[j,0]:.2E}")
-            axs[1, j].imshow(fake_patches[j,0,:,:].detach().cpu().numpy(), vmin=-2.0, vmax=2.0)
+            axs[1, j].imshow(fake_patches[j,0,:,:].detach().cpu().numpy(), vmin=height_map.vmin, vmax=height_map.vmax)
+            axs[1, j].axis('off')
 
         fig.savefig(f"reports/height_examples_{cfg.train.name}.pdf")
 

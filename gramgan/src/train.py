@@ -24,6 +24,7 @@ def gradient_penalty(
     discriminator: Discriminator,
     real_patches: torch.Tensor,
     fake_patches: torch.Tensor,
+    conditions: torch.Tensor,
 ) -> torch.Tensor:
     device = real_patches.device
     batch_size = real_patches.shape[0]
@@ -31,7 +32,7 @@ def gradient_penalty(
     theta = torch.rand(batch_size, 1, 1, 1, device=device)
     interp_patches = torch.lerp(real_patches, fake_patches, theta)
     interp_patches.requires_grad = True
-    interp_logits = discriminator(interp_patches)[0][:,0]
+    interp_logits = discriminator(conditions, interp_patches)[0][:,0]
 
     gradients = torch.autograd.grad(
         outputs=interp_logits,
@@ -48,14 +49,15 @@ def discriminator_loss(
     discriminator: Discriminator,
     real_patches: torch.Tensor,
     fake_patches: torch.Tensor,
+    conditions: torch.Tensor,
     cfg: DictConfig,
 ) -> torch.Tensor:
     
-    real_logits, _real_features = discriminator(real_patches)
-    fake_logits, _fake_features = discriminator(fake_patches)
+    real_logits, _real_features = discriminator(conditions, real_patches)
+    fake_logits, _fake_features = discriminator(conditions, fake_patches)
 
     wgan = fake_logits.mean() - real_logits.mean()
-    gp = gradient_penalty(discriminator, real_patches, fake_patches)
+    gp = gradient_penalty(discriminator, real_patches, fake_patches, conditions)
 
     return wgan + cfg.train.gp_weight * gp 
 
@@ -86,11 +88,12 @@ def generator_loss(
     discriminator: Discriminator,
     real_patches: torch.Tensor,
     fake_patches: torch.Tensor,
+    conditions: torch.Tensor,
     cfg: DictConfig,
 ) -> torch.Tensor:
 
-    real_logits, real_features = discriminator(real_patches)
-    fake_logits, fake_features = discriminator(fake_patches)
+    _real_logits, real_features = discriminator(conditions, real_patches)
+    fake_logits, fake_features = discriminator(conditions, fake_patches)
 
     wgan = -fake_logits.mean()
     style = style_loss(real_features, fake_features)
@@ -147,8 +150,8 @@ def train(cfg: DictConfig):
     generator = Generator(cfg.model.hidden_features, cfg.model.noise_features, cfg.model.output_features).to(device)
     discriminator = Discriminator(cfg.model.output_features).to(device)
 
-    optimizer_g = torch.optim.Adam(generator.parameters(), lr=1e-3)
-    optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-3)
+    optimizer_g = torch.optim.Adam(generator.parameters(), cfg.train.generator_lr)
+    optimizer_d = torch.optim.Adam(discriminator.parameters(), cfg.train.discriminator_lr)
 
     epoch_range = range(cfg.train.epochs)
 
@@ -184,13 +187,14 @@ def train(cfg: DictConfig):
         discriminator.zero_grad()
         generator.zero_grad()
 
-        real_patches = height_map.get_patches(cfg.train.batch_size)
+        real_patches, conditions = height_map.get_batch(cfg.train.batch_size)
+      
         noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
-        fake_patches = generator(noise, random_patch_coords(cfg, device=device))
+        fake_patches = generator(conditions, noise, random_patch_coords(cfg, device=device))
         fake_patches = fake_patches.permute([0, 3, 1, 2])
-
+        
         # detach fake patches to avoid computing generator gradients here
-        loss_d = discriminator_loss(discriminator, real_patches, fake_patches.detach(), cfg)
+        loss_d = discriminator_loss(discriminator, real_patches, fake_patches.detach(), conditions, cfg)
         loss_d.backward()
         optimizer_d.step()
 
@@ -199,7 +203,7 @@ def train(cfg: DictConfig):
         for p in discriminator.parameters():
             p.requires_grad = False
 
-        loss_g = generator_loss(discriminator, real_patches, fake_patches, cfg)
+        loss_g = generator_loss(discriminator, real_patches, fake_patches, conditions, cfg)
         loss_g.backward()
         optimizer_g.step()
         
