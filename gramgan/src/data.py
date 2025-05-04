@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import torch
+import torchvision
 import rasterio
 from torchvision.transforms import v2
 
-class RealHeightMap:
+
+class HeightMap:
     def __init__(self, tile_size: int, tiff_path: Path = Path("exemplars/yosemite.tif"), device=None):
         self.tile_size = tile_size
         
@@ -24,6 +26,8 @@ class RealHeightMap:
         self.vmin = 0.0
         self.vmax = 0.0
 
+        total_std = 0.0
+
         for tile_y in range(tile_count_y):
             for tile_x in range(tile_count_x):
                 tile = self.get_tile(tile_x, tile_y)
@@ -32,7 +36,10 @@ class RealHeightMap:
                 self.vmin = min(self.vmin, tile.min().item())
                 self.vmax = max(self.vmax, tile.max().item())
 
-        
+                total_std += tile.std()
+
+        avg_std = total_std / (tile_count_y * tile_count_x)
+        self.image /= avg_std
 
     def get_tile(self, tile_x: int, tile_y: int) -> torch.Tensor:
         x0 = tile_x * self.tile_size
@@ -63,16 +70,47 @@ class RealHeightMap:
 
         return patches, conditions
 
+class Texture:
+
+    def __init__(self, patch_size: int, img_path: Path = Path("exemplars/0.png"), device = None):
+        self.patch_size = patch_size
+        self.image = torchvision.io.read_image(img_path, torchvision.io.ImageReadMode.RGB).to(device)
+        self.transform = v2.Compose([
+            v2.ToDtype(torch.float, scale=True),
+            v2.RandomCrop(patch_size),
+        ])
+
+
+    def get_batch(self, batch_size: int) -> torch.Tensor:
+
+        patches = torch.empty(batch_size, 3, self.patch_size, self.patch_size, device=self.image.device)
+
+        for i in range(batch_size):
+            patches[i,:,:,:] = self.transform(self.image)
+
+        return patches
+
+
 if __name__ == "__main__":
     torch.manual_seed(1234)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 
-    height_map = RealHeightMap(tile_size=128, device=device)
+    texture = Texture(128, device=device)
 
-    patch, conditions = height_map.get_batch(4)
+    patches = texture.get_batch(8)
 
-    print(patch.mean(dim=(1, 2, 3)))
-    print(conditions[:,4])
+    import matplotlib.pyplot as plt
 
-    print(height_map.vmin)
-    print(height_map.vmax)
+    fig = plt.figure()
+    ax = fig.subplots(2, 4)
+
+    for i in range(2):
+        for j in range(4):
+            
+            idx = i * 4 + j
+            img =  patches[idx,:,:,:].permute([1, 2, 0]).cpu().numpy()
+            ax[i, j].imshow(img)
+            ax[i, j].axis('off')
+
+    fig.tight_layout()
+    fig.savefig("hej.pdf")

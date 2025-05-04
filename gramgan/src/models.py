@@ -78,7 +78,7 @@ class NoiseTransforms(nn.Module):
         transforms = torch.matmul(rotations, shears)
 
         for i in range(noise_features):
-            transforms[i,:,:] *= 0.25 * 2.0 ** (0.5 * i)
+            transforms[i,:,:] *= 2.0 ** (i - 4.0)
 
         self.transformations = nn.Parameter(transforms)
 
@@ -88,17 +88,6 @@ class NoiseTransforms(nn.Module):
         :return: transformed coordinates ([*, noise_features, 2])
         """
         return torch.einsum('...n,Mmn->...Mm', coords, self.transformations)
-
-class NoiseScales(nn.Module):
-
-    def __init__(self, noise_features: int):
-        super().__init__()
-        scales_init = torch.tensor([2.0 ** i for i in range(noise_features)])
-        scales_init = scales_init.view([noise_features, 1])
-        self.scales = nn.Parameter(scales_init)
-
-    def forward(self, coords: torch.Tensor) -> torch.Tensor:
-        return coords.unsqueeze(-2) * self.scales
 
 
 class GeneratorLayer(nn.Module):
@@ -123,15 +112,16 @@ class Generator(nn.Module):
     def __init__(self, hidden_features: int, noise_features: int, out_features: int):
         super().__init__()
 
-        self.head = nn.Sequential(
-            nn.Linear(9, hidden_features),
-            nn.LeakyReLU(),
-        )
+        # self.head = nn.Sequential(
+        #     nn.Linear(9, hidden_features),
+        #     nn.LeakyReLU(),
+        # )
+        self.input = torch.nn.Parameter(torch.ones(hidden_features))
         self.noise_transforms = NoiseTransforms(noise_features)
         
-        self.noise_features_per_layer = noise_features // 4
+        self.noise_features_per_layer = noise_features // 2
         self.noise_layers = nn.ModuleList(
-            [GeneratorLayer(hidden_features, hidden_features, self.noise_features_per_layer) for _ in range(4)],
+            [GeneratorLayer(hidden_features, hidden_features, self.noise_features_per_layer) for _ in range(2)],
         ) 
         self.tail = nn.Sequential(
             nn.Linear(hidden_features, hidden_features),
@@ -139,7 +129,7 @@ class Generator(nn.Module):
             nn.Linear(hidden_features, out_features),
         )
 
-    def forward(self, conditions: torch.Tensor, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
         """
         :param noise: an instance of the Noise class
         :param conditions: condition vectors [batch_size, 9]
@@ -150,8 +140,9 @@ class Generator(nn.Module):
         noise_coords = self.noise_transforms(coords) # [batch_size, ..., noise_features, 2]
         noise_values: torch.Tensor = noise(noise_coords) #[batch_size, ..., noise_features]
 
-        x: torch.Tensor = self.head(conditions) # [batch_size, hidden_size]
-        x = x.view([x.shape[0]] + [1] * (noise_values.dim() - 2) + [x.shape[1]]) # [batch_size, ..., hidden_size]
+        # x: torch.Tensor = self.head(conditions) # [batch_size, hidden_size]
+        # x = x.view([x.shape[0]] + [1] * (noise_values.dim() - 2) + [x.shape[1]]) # [batch_size, ..., hidden_size]
+        x = self.input
 
         k = self.noise_features_per_layer
 
@@ -177,17 +168,17 @@ class Discriminator(nn.Module):
             nn.Conv2d(512, 512, 3, padding=1),
         ])
 
-        self.linear_features = nn.Linear(512, 256)
-        self.linear_conditions = nn.Linear(9, 256)
+        # self.linear_features = nn.Linear(512, 256)
+        # self.linear_conditions = nn.Linear(9, 256)
 
         self.tail = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
+            nn.LeakyReLU(),
+            nn.Linear(512, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 1),
         )
 
-    def forward(self, conditions: torch.Tensor, image: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         extracted_features = []
 
         x = image
@@ -199,11 +190,11 @@ class Discriminator(nn.Module):
             x = F.avg_pool2d(x, 2)
 
         x = x.flatten(start_dim=1)
-        x = self.linear_features(x)
+        # x = self.linear_features(x)
         
-        y = conditions
-        y = self.linear_conditions(y)
+        # y = conditions
+        # y = self.linear_conditions(y)
 
-        z = torch.cat([x, y], dim=-1)
+        # z = torch.cat([x, y], dim=-1)
 
-        return self.tail(z), extracted_features
+        return self.tail(x), extracted_features

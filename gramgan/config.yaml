@@ -7,13 +7,12 @@ model:
 
 train:
   name: "debug"
+  epochs: 20
   save_frequency: 10
-  resume: False
   batch_size: 32
   gp_weight: 10.0
   style_weight: 1.0
   wgan_weight: 0.1
-  discriminator_iters: 1
-  epochs: 20
-  discriminator_lr: 2e-3
-  generator_lr: 5e-4
+  discriminator_iters: 5
+  discriminator_lr: 5e-4
+  generator_lr: 1e-4
