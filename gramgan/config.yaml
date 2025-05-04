@@ -3,6 +3,7 @@ model:
   noise_features: 16
   hidden_features: 128
   image_res: 128
+  output_features: 1
 
 train:
   name: "debug"
@@ -10,5 +11,9 @@ train:
   resume: False
   batch_size: 32
   gp_weight: 10.0
+  style_weight: 1.0
+  wgan_weight: 0.1
   discriminator_iters: 1
   epochs: 20
+  discriminator_lr: 2e-3
+  generator_lr: 5e-4
