@@ -1,7 +1,7 @@
 import numpy as np
 from noise import pnoise2
 import sys
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from numba import njit
@@ -58,7 +58,7 @@ def plot_3d(heightmap, seed):
     print(f"3D terrain saved as {filename}")
 
 #standard perlin noise generator
-def generate_perlin_map(width=100, height=100, scale=20.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=42):
+def generate_perlin_map(width, height, scale=20.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=42):
     noise_map = np.zeros((height, width))
     for y in range(height):
         for x in range(width):
@@ -73,9 +73,10 @@ def generate_perlin_map(width=100, height=100, scale=20.0, octaves=6, persistenc
             noise_map[y][x] = noise_val
     return noise_map
 
-def generate_map_for_erosion(seed=42):
-    low = generate_perlin_map(scale=100.0, seed=seed)
-    high = generate_perlin_map(scale=20.0, seed=seed)
+def generate_map_for_erosion(seed, width, height):
+    scale_factor = width / 100.0
+    low = generate_perlin_map(width, height, scale=100.0*scale_factor, seed=seed)
+    high = generate_perlin_map(width, height, scale=20.0*scale_factor, seed=seed)
     map = 0.7 * low + 0.3 * high
     map = (map - map.min()) / (map.max() - map.min())
     return map
@@ -237,7 +238,11 @@ def simulate_erosion(map, params, iterations=50000, seed=42):
     for i in range(iterations):
         simulate_droplet(map, params, rng_seeds[i])
 
-    map = gaussian_filter(map, sigma=1.0)
+    map = np.clip(map, 0.0, 1.0)
+    for i in range(5):
+        map = median_filter(map, size=3)
+        map = gaussian_filter(map, sigma=1.2)
+    map = (map - map.min()) / (map.max() - map.min())
     return map
 
 params = {
@@ -300,11 +305,23 @@ params = {
 if __name__ == "__main__":
 
     #check for an argument to set the seed or use the default seed (42)
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 2:
         seed = int(sys.argv[1])
+        width = int(sys.argv[2])
+        height = int(sys.argv[2])
     else:
         seed = 42
+        width = 100
+        height = 100
 
+    #create a map using perlin noise to simulate the erosion in
+    map = generate_map_for_erosion(seed, width, height)
+
+    #rainfall density
+    #adjust the number of iterations based on the size of the map
+    iterations = width * height
+
+    #create a dictionary to hold the parameters for the erosion simulation
     param_typed = Dict.empty(
         key_type=types.unicode_type,
         value_type=types.float64
@@ -313,13 +330,9 @@ if __name__ == "__main__":
     for key, value in params.items():
         param_typed[key] = value
 
-
-    #create a map using perlin noise to simulate the erosion in
-    map = generate_map_for_erosion(seed=seed)
-
     #simulate erosion on the map using the parameters in 'params'
-    map = simulate_erosion(map, param_typed, iterations=50000, seed=seed)
-    
+    map = simulate_erosion(map, param_typed, iterations, seed)
+
     #plot the final map using matplotlib
     np.save(f"terrain_{seed}.npy", map)
     plot_3d(map, seed)
