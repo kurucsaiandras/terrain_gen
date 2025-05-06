@@ -107,49 +107,90 @@ class GeneratorLayer(nn.Module):
 
         return self.activation(self.linear(x) + self.linear_noise(noise))
 
+class LayerConditionMap(nn.Module):
+    def __init__(
+        self,
+        hidden_features: int,
+    ):
+        super().__init__()
+        self.hidden_features = hidden_features    
+        self.map = nn.Sequential(
+            nn.Linear(64, 2*hidden_features),
+            nn.ReLU(),
+            nn.Linear(2*hidden_features, 2*hidden_features),
+        ) 
+
+    def forward(self, condition: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self.map(condition)
+        return x[:,:self.hidden_features], x[:,self.hidden_features:]
+
+
 class Generator(nn.Module):
     
-    def __init__(self, hidden_features: int, noise_features: int, out_features: int):
+    def __init__(
+        self,
+        hidden_features: int,
+        noise_features: int,
+        out_features: int,
+        num_hidden_layers: int,
+    ):
         super().__init__()
 
-        # self.head = nn.Sequential(
-        #     nn.Linear(9, hidden_features),
-        #     nn.LeakyReLU(),
-        # )
+        self.hidden_features = hidden_features
+        self.noise_features = noise_features
+
         self.input = torch.nn.Parameter(torch.ones(hidden_features))
         self.noise_transforms = NoiseTransforms(noise_features)
+        self.noise_features_per_layer = noise_features // num_hidden_layers
         
-        self.noise_features_per_layer = noise_features // 2
-        self.noise_layers = nn.ModuleList(
-            [GeneratorLayer(hidden_features, hidden_features, self.noise_features_per_layer) for _ in range(2)],
-        ) 
+        self.condition_head = nn.Sequential(
+            nn.Linear(9, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+        )
+
+        self.layer_condition_maps = nn.ModuleList([
+            LayerConditionMap(hidden_features) for _ in range(num_hidden_layers)
+        ])
+
+        self.noise_layers = nn.ModuleList([
+            GeneratorLayer(hidden_features, hidden_features, self.noise_features_per_layer) for _ in range(num_hidden_layers)
+        ]) 
         self.tail = nn.Sequential(
             nn.Linear(hidden_features, hidden_features),
             nn.LeakyReLU(),
             nn.Linear(hidden_features, out_features),
         )
 
-    def forward(self, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, conditions: torch.Tensor, noise: Noise, coords: torch.Tensor) -> torch.Tensor:
         """
         :param noise: an instance of the Noise class
         :param conditions: condition vectors [batch_size, 9]
         :param coords: coordinates of sampled points [batch_size, ..., 2]
-        :return: height [batch_size, ..., out_features]
+        :return: values [batch_size, ..., out_features]
         """
-        
-        noise_coords = self.noise_transforms(coords) # [batch_size, ..., noise_features, 2]
+        noise_coords: torch.Tensor = self.noise_transforms(coords) # [batch_size, ..., noise_features, 2]
         noise_values: torch.Tensor = noise(noise_coords) #[batch_size, ..., noise_features]
 
-        # x: torch.Tensor = self.head(conditions) # [batch_size, hidden_size]
-        # x = x.view([x.shape[0]] + [1] * (noise_values.dim() - 2) + [x.shape[1]]) # [batch_size, ..., hidden_size]
         x = self.input
 
-        k = self.noise_features_per_layer
+        z = self.condition_head(conditions)
+        layer_conditions = [map(z) for map in self.layer_condition_maps]
+        
+        batch_size = coords.shape[0]
+        weights_bias_shape = [batch_size] + [1] * (coords.dim() - 2) + [self.hidden_features]
 
-        for i, layer in enumerate(self.noise_layers):
+        k = self.noise_features_per_layer
+        for i, (layer, (weights, biases)) in enumerate(zip(self.noise_layers, layer_conditions)):
             noise_layer_values = noise_values[...,i*k:(i+1)*k] # [batch_size, ..., k]
 
-            x = layer(x, noise_layer_values)
+            weights = weights.view(weights_bias_shape)
+            biases = biases.view(weights_bias_shape)
+
+            x = weights * layer(x, noise_layer_values) + biases
 
         return self.tail(x)
 
@@ -168,8 +209,8 @@ class Discriminator(nn.Module):
             nn.Conv2d(512, 512, 3, padding=1),
         ])
 
-        # self.linear_features = nn.Linear(512, 256)
-        # self.linear_conditions = nn.Linear(9, 256)
+        self.linear_features = nn.Linear(512, 256 + 128)
+        self.linear_conditions = nn.Linear(9, 128)
 
         self.tail = nn.Sequential(
             nn.LeakyReLU(),
@@ -178,7 +219,7 @@ class Discriminator(nn.Module):
             nn.Linear(512, 1),
         )
 
-    def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    def forward(self, conditions: torch.Tensor, image: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         extracted_features = []
 
         x = image
@@ -190,11 +231,11 @@ class Discriminator(nn.Module):
             x = F.avg_pool2d(x, 2)
 
         x = x.flatten(start_dim=1)
-        # x = self.linear_features(x)
+        x = self.linear_features(x)
         
-        # y = conditions
-        # y = self.linear_conditions(y)
+        y = conditions
+        y = self.linear_conditions(y)
 
-        # z = torch.cat([x, y], dim=-1)
+        z = torch.cat([x, y], dim=-1)
 
-        return self.tail(x), extracted_features
+        return self.tail(z), extracted_features

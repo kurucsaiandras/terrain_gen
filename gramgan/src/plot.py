@@ -35,7 +35,7 @@ def plot_losses(cfg: DictConfig):
         color='r',
         alpha=0.2,
     )
-    ax.set_ylim(-100.0, 100.0)
+    ax.set_ylim(-500.0, 500.0)
     ax.set_xlabel("Training step")
     ax.set_ylabel("Loss")
     ax.legend()
@@ -89,13 +89,18 @@ def plot_texture_examples(cfg: DictConfig, device=None):
         fig.tight_layout()
         fig.savefig(f"reports/texture_examples_{cfg.train.name}.pdf")
 
-def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg: DictConfig, device=None):
+def plot_height_examples(cfg: DictConfig, device=None):
     torch.manual_seed(1234)
 
     height_map = HeightMap(cfg.model.image_res, device=device) 
     noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
 
-    generator = Generator(cfg.model.hidden_features, cfg.model.noise_features, cfg.model.output_features).to(device)
+    generator = Generator(
+        cfg.model.hidden_features,
+        cfg.model.noise_features,
+        cfg.model.output_features,
+        cfg.model.num_hidden_layers,
+    ).to(device)
     discriminator = Discriminator(cfg.model.output_features).to(device)
 
     save_dir: Path = Path("models") / cfg.train.name
@@ -115,11 +120,11 @@ def plot_height_examples(generator: Generator, discriminator: Discriminator, cfg
                 epoch,
             )
             
-            real_patches, _ = height_map.get_batch(1)
-            fake_patches = generator(noise, random_patch_coords(cfg, device)).permute([0, 3, 1, 2])
+            real_patches, conditions = height_map.get_batch(1)
+            fake_patches = generator(conditions, noise, random_patch_coords(1, cfg.model.image_res, device)).permute([0, 3, 1, 2])
 
-            real_logits, _ = discriminator(real_patches)
-            fake_logits, _ = discriminator(fake_patches)
+            real_logits, _ = discriminator(conditions, real_patches)
+            fake_logits, _ = discriminator(conditions, fake_patches)
 
             real_img = real_patches[0,:,:,:].permute([1, 2, 0]).cpu().numpy()
             fake_img = fake_patches[0,:,:,:].permute([1, 2, 0]).cpu().numpy()
@@ -222,26 +227,11 @@ def latest_epoch(save_dir: Path) -> int | None:
 @hydra.main(version_base=None, config_path="..", config_name="config")
 def all_plots(cfg: DictConfig):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-    save_dir: Path = Path("models") / cfg.train.name
-
-    generator = Generator(cfg.model.hidden_features, cfg.model.noise_features, cfg.model.output_features).to(device)
-    discriminator = Discriminator(cfg.model.output_features).to(device)
-
-    epoch = latest_epoch(save_dir)
-    load_models(
-        save_dir,
-        generator,
-        discriminator,
-        epoch,
-    )
-
-    generator.eval()
-    discriminator.eval()
 
     # plot_sample_bilinear()
     # plot_noise_transforms(cfg, device)
     # plot_generator_noise_transforms(generator, cfg, device)
-    plot_height_examples(generator, discriminator, cfg, device)
+    plot_height_examples(cfg, device)
     # plot_texture_examples(cfg, device)
     plot_losses(cfg)
 
