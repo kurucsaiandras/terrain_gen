@@ -3,7 +3,6 @@ from noise import pnoise2
 import sys
 from scipy.ndimage import gaussian_filter, median_filter
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from numba import njit
 from numba.typed import Dict
 from numba import types
@@ -239,11 +238,35 @@ def simulate_erosion(map, params, iterations=50000, seed=42):
         simulate_droplet(map, params, rng_seeds[i])
 
     map = np.clip(map, 0.0, 1.0)
-    for i in range(5):
-        map = median_filter(map, size=3)
-        map = gaussian_filter(map, sigma=1.2)
+    map = median_filter(map, size=3)
+    map = gaussian_filter(map, sigma=1.2)
     map = (map - map.min()) / (map.max() - map.min())
     return map
+
+def export_obj(heightmap, filename="terrain.obj", scale=1.0, height_scale=50.0):
+    h, w = heightmap.shape
+    vertices = []
+    faces = []
+
+    # Create vertices
+    for y in range(h):
+        for x in range(w):
+            z = heightmap[y, x] * height_scale
+            vertices.append(f"v {x * scale} {y * scale} {z}")
+
+    # Create faces (two triangles per grid square)
+    for y in range(h - 1):
+        for x in range(w - 1):
+            i = y * w + x + 1
+            faces.append(f"f {i} {i + 1} {i + w}")
+            faces.append(f"f {i + 1} {i + w + 1} {i + w}")
+
+    # Write to file
+    with open(filename, "w") as f:
+        f.write("\n".join(vertices) + "\n")
+        f.write("\n".join(faces))
+
+    print(f"Exported OBJ mesh to {filename}")
 
 params = {
     #droplet inertia
@@ -332,6 +355,9 @@ if __name__ == "__main__":
 
     #simulate erosion on the map using the parameters in 'params'
     map = simulate_erosion(map, param_typed, iterations, seed)
+
+    #export the map to an obj file
+    export_obj(map, filename=f"terrain_{seed}.obj")
 
     #plot the final map using matplotlib
     np.save(f"terrain_{seed}.npy", map)
