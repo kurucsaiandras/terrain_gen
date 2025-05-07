@@ -13,3 +13,4 @@ submit_train.sh
 
 # data
 exemplars/yosemite.tif
+exemplars/wisconsin.tif
