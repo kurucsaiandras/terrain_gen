@@ -58,6 +58,7 @@ def plot_3d(heightmap, seed):
 
 #standard perlin noise generator
 def generate_perlin_map(width, height, scale=20.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=42):
+    seed %= 512
     noise_map = np.zeros((height, width))
     for y in range(height):
         for x in range(width):
@@ -153,7 +154,21 @@ def get_gradient(map, x, y):
     dy = bilinear(map, x, y + 1) - bilinear(map, x, y - 1)
     return dx, dy
 
-    
+def pad_edges(map):
+    # Top and bottom
+    map[0, :] = map[2, :]
+    map[1, :] = map[2, :]
+    map[-1, :] = map[-3, :]
+    map[-2, :] = map[-3, :]
+
+    # Left and right
+    map[:, 0] = map[:, 2]
+    map[:, 1] = map[:, 2]
+    map[:, -1] = map[:, -3]
+    map[:, -2] = map[:, -3]
+
+    return map
+
 #simulates the droplet movement and erosion process in the map using the parameters given in 'p'
 @njit
 def simulate_droplet(map, p, rng):
@@ -205,18 +220,18 @@ def simulate_droplet(map, p, rng):
         delta_h = height - new_height
 
         #calculate capacity based based on the slop and speed
-        capacity = max(-delta_h * speed * volume * capacity_factor, min_slope)
+        capacity = max(delta_h * speed * volume * capacity_factor, min_slope)
 
         if sediment > capacity:
             #deposit excess sediment if its over capacity
             deposit = (sediment - capacity) * deposition
-            deposit = min((sediment - capacity) * deposition, 0.01)
+            # deposit = min((sediment - capacity) * deposition, 0.01)
             apply_bilinear_change(map, x, y, deposit)
             sediment -= deposit
         else:
             #erode the terrain if the sediment is under capacity
             erode = (capacity - sediment) * erosion
-            erode = min((capacity - sediment) * erosion, 0.01, height)
+            # erode = min((capacity - sediment) * erosion, 0.01, height)
             apply_bilinear_change(map, x, y, -erode)
             sediment += erode
 
@@ -230,7 +245,7 @@ def simulate_droplet(map, p, rng):
         if volume < 0.01 or speed < 0.01:
             break
 
-def simulate_erosion(map, params, iterations=50000, seed=42):
+def simulate_erosion(map, params, iterations=50000):
     #simulate erosion on the map given map using the parameters in 'params'
 
     rng_seeds = np.random.random((iterations, 2))
@@ -239,6 +254,7 @@ def simulate_erosion(map, params, iterations=50000, seed=42):
 
     map = np.clip(map, 0.0, 1.0)
     map = median_filter(map, size=3)
+    map = gaussian_filter(map, sigma=1.2)
     map = gaussian_filter(map, sigma=1.2)
     map = (map - map.min()) / (map.max() - map.min())
     return map
@@ -272,22 +288,22 @@ params = {
     #droplet inertia
     #high = smooth curves
     #low = sharp turns
-    "inertia": 0.2,
+    "inertia": 0.1,
 
     #sediment capacity factor
     #high = more sediment capacity, less erosion
     #low = less sediment capacity, more erosion
-    "capacity": 1.0,
+    "capacity": 0.8,
 
     #minimum slope to erode
     #high = flat terrain erodes less
     #low = flat terrain erodes more
-    "min_slope": 0.001,
+    "min_slope": 0.1,
 
     #water evaporation factor
     #high = more evaporation, less erosion
     #low = less evaporation, more erosion
-    "evaporation": 0.02,
+    "evaporation": 0.01,
 
     #sediment deposition factor
     #high = more deposition, less erosion
@@ -297,7 +313,7 @@ params = {
     #sediment erosion factor
     #high = more erosion, less deposition
     #low = less erosion, more deposition
-    "erosion": 0.15,
+    "erosion": 0.4,
 
     #gravity factor
     #high = more gravity, water moves faster downhill
@@ -307,7 +323,7 @@ params = {
     #initial water factor
     #high = more water per droplet, more erosion
     #low = less water per droplet, less erosion
-    "initial_water": 1.0,
+    "initial_water": 2.0,
 
     #initial droplet speed
     "initial_speed": 1.0,
@@ -315,15 +331,22 @@ params = {
     #maximum number of iterations for each droplet
     #high = more iterations, more erosion
     #low = less iterations, less erosion
-    "max_iterations": 100
+    "max_iterations": 150
 }
 
 #for stronger erosion
+#"inertia": 0.1
 #"capacity": 0.8,
 #"evaporation": 0.01,
 #"erosion": 0.4,
 #"max_iterations": 150,
-#"inertia": 0.1
+
+#for weaker erosion
+# inertia = 0.2
+# capacity = 1.0
+# evaporation = 0.02
+# erosion = 0.15
+# max_iterations = 100
 
 if __name__ == "__main__":
 
@@ -354,7 +377,10 @@ if __name__ == "__main__":
         param_typed[key] = value
 
     #simulate erosion on the map using the parameters in 'params'
-    map = simulate_erosion(map, param_typed, iterations, seed)
+    map = simulate_erosion(map, param_typed, iterations)
+    
+    #remove the edges of the map to avoid artifacts in the final mesh
+    map = pad_edges(map)
 
     #export the map to an obj file
     export_obj(map, filename=f"terrain_{seed}.obj")
