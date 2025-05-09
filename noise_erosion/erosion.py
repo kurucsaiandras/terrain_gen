@@ -1,12 +1,40 @@
 import numpy as np
 from noise import pnoise2
 import sys
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from numba import njit
+from numba.typed import Dict
+from numba import types
 
-#plot the heightmap using matplotlib
+
+def biome_colormap(heightmap):
+    h, w = heightmap.shape
+    rgb = np.zeros((h, w, 3), dtype=np.float32)
+
+    for y in range(h):
+        for x in range(w):
+            val = heightmap[y, x]
+            if val < 0.2:
+                rgb[y, x] = [0.2, 0.4, 1.0]  # water
+            elif val < 0.35:
+                rgb[y, x] = [0.9, 0.8, 0.6]  # beach
+            elif val < 0.6:
+                rgb[y, x] = [0.1, 0.6, 0.2]  # grass
+            elif val < 0.8:
+                rgb[y, x] = [0.4, 0.3, 0.2]  # rock
+            else:
+                rgb[y, x] = [1.0, 1.0, 1.0]  # snow
+    return rgb
+
 def plot_3d(heightmap, seed):
+    # Save biome map first
+    biome_img = biome_colormap(heightmap)
+    filename = f"biome_map_{seed}.png"
+    plt.imsave(filename, biome_img)
+    print(f"Biome map saved as biome_map_{seed}.png")
+
+    # Then show 3D terrain
     h, w = heightmap.shape
     x = np.arange(w)
     y = np.arange(h)
@@ -26,10 +54,11 @@ def plot_3d(heightmap, seed):
 
     filename = f"eroded_terrain_{seed}.png"
     fig.savefig(filename, dpi=300, bbox_inches='tight')
-
+    print(f"3D terrain saved as {filename}")
 
 #standard perlin noise generator
-def generate_perlin_map(width=100, height=100, scale=20.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=42):
+def generate_perlin_map(width, height, scale=20.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=42):
+    seed %= 512
     noise_map = np.zeros((height, width))
     for y in range(height):
         for x in range(width):
@@ -44,21 +73,23 @@ def generate_perlin_map(width=100, height=100, scale=20.0, octaves=6, persistenc
             noise_map[y][x] = noise_val
     return noise_map
 
-def generate_map_for_erosion(seed=42):
-    low = generate_perlin_map(scale=100.0, seed=seed)
-    high = generate_perlin_map(scale=20.0, seed=seed)
+def generate_map_for_erosion(seed, width, height):
+    scale_factor = width / 100.0
+    low = generate_perlin_map(width, height, scale=100.0*scale_factor, seed=seed)
+    high = generate_perlin_map(width, height, scale=20.0*scale_factor, seed=seed)
     map = 0.7 * low + 0.3 * high
     map = (map - map.min()) / (map.max() - map.min())
     return map
 
 #used to apply a change to the map at a given position using bilinear interpolation
 #this is done by taking the four nearest grid points and interpolating between them based on the fractional part of the drops position
+@njit
 def apply_bilinear_change(map, x, y, delta):
     h, w = map.shape
 
     #clamp coordinates to stay within valid range
-    x = np.clip(x, 0, w - 2)
-    y = np.clip(y, 0, h - 2)
+    x = min(max(x, 0), w - 2)
+    y = min(max(y, 0), h - 2)
 
     #get the integer part of the coordinates
     x0 = int(x)
@@ -85,12 +116,14 @@ def apply_bilinear_change(map, x, y, delta):
 #we use bilinear interpolation to get the height of the terrain at a given the drops position which is floating point
 #this is done by taking the four nearest grid points and interpolating between them based on the fractional part of the drops position
 #this allows us to get a smooth height value even if the droplet is not exactly on a grid point
+@njit
 def bilinear(map, x, y):
     #get map height and width
     h, w = map.shape
 
     #clamp coordinates to stay within valid range for indexing
-    x, y = np.clip(x, 0, w - 2), np.clip(y, 0, h - 2)
+    x = min(max(x, 0), w - 2)
+    y = min(max(y, 0), h - 2)
 
     #integer part of the coordinates
     x0, y0 = int(x), int(y)
@@ -100,9 +133,9 @@ def bilinear(map, x, y):
 
     #get the four nearest grid points
     map00 = map[y0, x0]
-    map01 = map[y0, x0 + 1]
-    map10 = map[y0 + 1, x0]
-    map11 = map[y0 + 1, x0 + 1]
+    map01 = map[y0, x0+1]
+    map10 = map[y0+1, x0]
+    map11 = map[y0+1, x0+1]
 
     #interpolate between the top and bottom edges
     top = map00 * (1 - fx) + map01 * fx
@@ -115,14 +148,30 @@ def bilinear(map, x, y):
 #used to calculate the gradient of the terrain at a given position
 #this is done by taking the height of the terrain at the position and at the 
 #four nearest grid points and using central differences to calculate the slope in both directions
+@njit
 def get_gradient(map, x, y):
     dx = bilinear(map, x + 1, y) - bilinear(map, x - 1, y)
     dy = bilinear(map, x, y + 1) - bilinear(map, x, y - 1)
-    return np.array([dx, dy])
+    return dx, dy
 
-    
+def pad_edges(map):
+    # Top and bottom
+    map[0, :] = map[2, :]
+    map[1, :] = map[2, :]
+    map[-1, :] = map[-3, :]
+    map[-2, :] = map[-3, :]
+
+    # Left and right
+    map[:, 0] = map[:, 2]
+    map[:, 1] = map[:, 2]
+    map[:, -1] = map[:, -3]
+    map[:, -2] = map[:, -3]
+
+    return map
+
 #simulates the droplet movement and erosion process in the map using the parameters given in 'p'
-def simulate_droplet(map, p):
+@njit
+def simulate_droplet(map, p, rng):
     #load the initial parameters
     inertia = p["inertia"]          #inertia
     capacity_factor = p["capacity"] #capacity of the droplet
@@ -136,30 +185,34 @@ def simulate_droplet(map, p):
     max_iter = p["max_iterations"]  #maximum number of iterations
 
     #initialize the droplet
-    sediment = 0.0                   #sediment levels
-    direction = np.array([0.0, 0.0]) #direction
-    x = np.random.uniform(0, map.shape[1] - 1) #randomly select a position for the droplet
-    y = np.random.uniform(0, map.shape[0] - 1)
+    sediment = 0.0                  #sediment levels
+    x_dir, y_dir = 0.0, 0.0         #direction of the droplet
+
+    #get random position for the droplet
+    x = rng[0] * (map.shape[1] - 1)
+    y = rng[1] * (map.shape[0] - 1)
 
     for _ in range(max_iter):
         #calculate height and gradient
         height = bilinear(map, x, y)
-        gradient = get_gradient(map, x, y)
+        x_grad, y_grad = get_gradient(map, x, y)
 
-        #update diretion based on the gradient and inertia
-        new_dir = direction * inertia - gradient * (1 - inertia)
-        norm = np.linalg.norm(new_dir)
+        norm = np.sqrt(x_grad**2 + y_grad**2)
         if norm < 1e-6:
-            break #exit if the droplet is stuck
-        #normalize the direction vector
-        direction = new_dir / norm
+            break
+        #calculate the gradient direction
+        x_grad /= norm
+        y_grad /= norm
+
+        #update direction using the gradient and inertia
+        x_dir = x_dir * inertia + x_grad * (1 - inertia)
+        y_dir = y_dir * inertia + y_grad * (1 - inertia)
 
         #move drop
-        x = x + direction[0] * speed
-        y = y + direction[1] * speed
+        x += x_dir * speed
+        y += y_dir * speed
 
-        #if the droplet is out of bounds, break the loop
-        if not (1 <= x < map.shape[1] - 2 and 1 <= y < map.shape[0] - 2):
+        if (x < 1 or x >= map.shape[1]-2 or y < 1 or y >= map.shape[0]-2):
             break
 
         #calculate the new height using bilinear interpolation
@@ -167,18 +220,18 @@ def simulate_droplet(map, p):
         delta_h = height - new_height
 
         #calculate capacity based based on the slop and speed
-        capacity = max(-delta_h * speed * volume * capacity_factor, min_slope)
+        capacity = max(delta_h * speed * volume * capacity_factor, min_slope)
 
         if sediment > capacity:
             #deposit excess sediment if its over capacity
             deposit = (sediment - capacity) * deposition
-            deposit = min((sediment - capacity) * deposition, 0.01)
+            # deposit = min((sediment - capacity) * deposition, 0.01)
             apply_bilinear_change(map, x, y, deposit)
             sediment -= deposit
         else:
             #erode the terrain if the sediment is under capacity
             erode = (capacity - sediment) * erosion
-            erode = min((capacity - sediment) * erosion, 0.01, height)
+            # erode = min((capacity - sediment) * erosion, 0.01, height)
             apply_bilinear_change(map, x, y, -erode)
             sediment += erode
 
@@ -192,36 +245,65 @@ def simulate_droplet(map, p):
         if volume < 0.01 or speed < 0.01:
             break
 
-def simulate_erosion(map, params, iterations=50000, seed=42):
+def simulate_erosion(map, params, iterations=50000):
     #simulate erosion on the map given map using the parameters in 'params'
 
-    np.random.seed(seed)
-    for _ in range(iterations):
-        simulate_droplet(map, params)
+    rng_seeds = np.random.random((iterations, 2))
+    for i in range(iterations):
+        simulate_droplet(map, params, rng_seeds[i])
 
-    map = gaussian_filter(map, sigma=1.0)
+    map = np.clip(map, 0.0, 1.0)
+    map = median_filter(map, size=3)
+    map = gaussian_filter(map, sigma=1.2)
+    map = gaussian_filter(map, sigma=1.2)
+    map = (map - map.min()) / (map.max() - map.min())
     return map
+
+def export_obj(heightmap, filename="terrain.obj", scale=1.0, height_scale=50.0):
+    h, w = heightmap.shape
+    vertices = []
+    faces = []
+
+    # Create vertices
+    for y in range(h):
+        for x in range(w):
+            z = heightmap[y, x] * height_scale
+            vertices.append(f"v {x * scale} {y * scale} {z}")
+
+    # Create faces (two triangles per grid square)
+    for y in range(h - 1):
+        for x in range(w - 1):
+            i = y * w + x + 1
+            faces.append(f"f {i} {i + 1} {i + w}")
+            faces.append(f"f {i + 1} {i + w + 1} {i + w}")
+
+    # Write to file
+    with open(filename, "w") as f:
+        f.write("\n".join(vertices) + "\n")
+        f.write("\n".join(faces))
+
+    print(f"Exported OBJ mesh to {filename}")
 
 params = {
     #droplet inertia
     #high = smooth curves
     #low = sharp turns
-    "inertia": 0.2,
+    "inertia": 0.1,
 
     #sediment capacity factor
     #high = more sediment capacity, less erosion
     #low = less sediment capacity, more erosion
-    "capacity": 1.0,
+    "capacity": 0.8,
 
     #minimum slope to erode
     #high = flat terrain erodes less
     #low = flat terrain erodes more
-    "min_slope": 0.001,
+    "min_slope": 0.1,
 
     #water evaporation factor
     #high = more evaporation, less erosion
     #low = less evaporation, more erosion
-    "evaporation": 0.02,
+    "evaporation": 0.01,
 
     #sediment deposition factor
     #high = more deposition, less erosion
@@ -231,7 +313,7 @@ params = {
     #sediment erosion factor
     #high = more erosion, less deposition
     #low = less erosion, more deposition
-    "erosion": 0.15,
+    "erosion": 0.4,
 
     #gravity factor
     #high = more gravity, water moves faster downhill
@@ -241,7 +323,7 @@ params = {
     #initial water factor
     #high = more water per droplet, more erosion
     #low = less water per droplet, less erosion
-    "initial_water": 1.0,
+    "initial_water": 2.0,
 
     #initial droplet speed
     "initial_speed": 1.0,
@@ -249,22 +331,60 @@ params = {
     #maximum number of iterations for each droplet
     #high = more iterations, more erosion
     #low = less iterations, less erosion
-    "max_iterations": 100
+    "max_iterations": 150
 }
+
+#for stronger erosion
+#"inertia": 0.1
+#"capacity": 0.8,
+#"evaporation": 0.01,
+#"erosion": 0.4,
+#"max_iterations": 150,
+
+#for weaker erosion
+# inertia = 0.2
+# capacity = 1.0
+# evaporation = 0.02
+# erosion = 0.15
+# max_iterations = 100
 
 if __name__ == "__main__":
 
     #check for an argument to set the seed or use the default seed (42)
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 2:
         seed = int(sys.argv[1])
+        width = int(sys.argv[2])
+        height = int(sys.argv[2])
     else:
         seed = 42
+        width = 100
+        height = 100
 
     #create a map using perlin noise to simulate the erosion in
-    map = generate_map_for_erosion(seed=seed)
+    map = generate_map_for_erosion(seed, width, height)
+
+    #rainfall density
+    #adjust the number of iterations based on the size of the map
+    iterations = width * height
+
+    #create a dictionary to hold the parameters for the erosion simulation
+    param_typed = Dict.empty(
+        key_type=types.unicode_type,
+        value_type=types.float64
+    )
+
+    for key, value in params.items():
+        param_typed[key] = value
 
     #simulate erosion on the map using the parameters in 'params'
-    map = simulate_erosion(map, params, iterations=50000, seed=seed)
+    map = simulate_erosion(map, param_typed, iterations)
     
+    #remove the edges of the map to avoid artifacts in the final mesh
+    map = pad_edges(map)
+
+    #export the map to an obj file
+    export_obj(map, filename=f"terrain_{seed}.obj")
+
     #plot the final map using matplotlib
+    np.save(f"terrain_{seed}.npy", map)
     plot_3d(map, seed)
