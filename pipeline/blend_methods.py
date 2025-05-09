@@ -3,8 +3,19 @@ import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
 
+def save_for_ppt(img, filename, peaks=None):
+    plt.figure(figsize=(10, 10))  # Set figure size in inches
+    plt.imshow(img, cmap='gray')
+    plt.axis('off')  # Hide axes
+    if peaks is not None:
+        plt.scatter(peaks[:, 0], peaks[:, 1], c='red', s=5)
+
+    # Save at high resolution (e.g., 300 DPI)
+    plt.savefig(f"results/{filename}_plot.png", dpi=300, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
 # Load data
-dla = Image.open('dla/results/terrain/masked_terrain_blurred_gramgan.png').convert('L')
+dla = Image.open('results/terrain/9_masked_terrain_ppt.png').convert('L')
 gramgan = Image.open('dla/data/gramgan_raw.png').convert('L')
 # Normalize both images to the range [0, 1]
 dla = (dla - np.min(dla)) / (np.max(dla) - np.min(dla))
@@ -13,6 +24,7 @@ gramgan = (gramgan - np.min(gramgan)) / (np.max(gramgan) - np.min(gramgan))
 terrain = 0.8 * dla + 0.2 * gramgan
 # Height based weights blending
 #terrain = dla * (1.0 + 0.2 * gramgan)
+save_for_ppt(terrain, "10_terrain_blended")
 
 Z = np.array(terrain)
 # Flip the image vertically to match the coordinate system

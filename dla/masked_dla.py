@@ -7,7 +7,15 @@ import cv2
 from scipy.ndimage import label
 
 class MaskedDla:
-    def __init__(self, size=64, start_pos=np.array([[31, 31]]), max_filled=0.5, allow_diagonals=False, num_of_walkers=1, base_mask=None, save_vid=False):
+    def __init__(self, size=64,
+                 start_pos=np.array([[31, 31]]),
+                 max_filled=0.5,
+                 allow_diagonals=False,
+                 num_of_walkers=1,
+                 base_mask=None,
+                 save_vid=False,
+                 toggle_ranges=True):
+        self.toggle_ranges = toggle_ranges # Whether to grow the spawn range if it reaches the edge of the image
         self.save_vid = save_vid
         if save_vid:
             self.video_writer = None
@@ -74,7 +82,7 @@ class MaskedDla:
         h, w = self.grid.shape
         pad = 10  # Padding width in pixels
         # List of maps
-        maps = [self.grid, self.mask, self.movement_mask, self.spawn_mask]
+        maps = [self.mask, self.movement_mask, self.spawn_mask]
         num_maps = len(maps)
         # Create canvas with white padding between maps
         canvas_width = w * num_maps + pad * (num_maps - 1)
@@ -84,6 +92,8 @@ class MaskedDla:
         # Place each map with padding
         for i, m in enumerate(maps):
             m = (m > 0) * 255
+            if (i > 0): # Overlay on mask
+                m[(m == 255) & (self.mask == 0)] = 225
             x_start = i * (w + pad)
             canvas[:, x_start:x_start + w] = m
         # Draw white padding between maps
@@ -105,6 +115,12 @@ class MaskedDla:
         self.video_writer.write(canvas_color)
 
 ############################ FUNCTIONALITY ##########################
+
+    def is_range_within_image(self, idx):
+        # Check if the range is within the image bounds
+        y, x = self.start_pos[idx]
+        r = self.ranges[idx] - self.range_step
+        return (y - r >= 0) and (y + r < self.size) and (x - r >= 0) and (x + r < self.size)
 
     def is_in_range(self, idx, pos):
         # Check if the position is within the current range
@@ -141,12 +157,6 @@ class MaskedDla:
         circle_mask[distance_squared <= self.ranges[idx]**2] = 0
         # Update the movement mask with the part of the new circle that lies in the mask
         self.movement_mask = (circle_mask | self.mask) & self.movement_mask
-        #plt.imshow(self.mask, cmap='gray')
-        #plt.show()
-        #plt.imshow(circle_mask, cmap='gray')
-        #plt.show()
-        #plt.imshow(self.movement_mask, cmap='gray')
-        #plt.show()
     
     def update_spawn_mask(self):
         # Recalculate the spawn mask based on the current ranges
@@ -180,10 +190,7 @@ class MaskedDla:
             return valid_moves[np.random.choice(len(valid_moves))]
         else: # HACK: Just respawn in the spawn mask
             empty_tiles_in_range = np.argwhere(self.spawn_mask == 0)
-            #self.plot_all_maps()
             return empty_tiles_in_range[np.random.choice(empty_tiles_in_range.shape[0])]
-            #print("No valid moves available")
-            #raise ValueError("No valid moves available")
     
     def get_neighbors(self, pos):
         # Get indices of neighbors
@@ -197,8 +204,6 @@ class MaskedDla:
 
     def step(self):
         for i, tile in enumerate(self.walkers):
-            #if self.grid[tuple(tile)] == 1:
-                #raise ValueError("Tile already occupied")
             # Move if it does not have a neighbor
             neighbors = self.get_neighbors(tile)
             if len(neighbors) == 0:
@@ -209,8 +214,6 @@ class MaskedDla:
                 self.DBG_START_TIME = time.time()
                 # Randomly select a neighbor
                 neighbor = neighbors[np.random.choice(len(neighbors))]
-                # Connect the tile to the neighbor
-                #self.connected_pairs.append((tuple(neighbor), tuple(tile)))
                 # Add the tile to the grid if inside the mask
                 if self.movement_mask[tuple(tile)] == 0:
                     mountain_id = self.grid[tuple(neighbor)]
@@ -219,12 +222,15 @@ class MaskedDla:
                     self.spawn_mask[tuple(tile)] = 1
                     self.mask[tuple(tile)] = 1 # mark as filled
                     if not self.is_in_range(mountain_id-1, tile): # IDs start from 1 so subtract for indexing
-                        self.update_movement_mask(mountain_id-1) # update the range of the mountain
-                        self.update_spawn_mask()
-                if self.save_vid:
-                    self.write_frame()
+                        if (not self.toggle_ranges) or self.is_range_within_image(mountain_id-1):
+                            self.update_movement_mask(mountain_id-1) # update the range of the mountain
+                            self.update_spawn_mask()
                 # Choose new point in the mask
                 empty_tiles_in_range = np.argwhere(self.spawn_mask == 0)
+                if empty_tiles_in_range.shape[0] == 0:
+                    print("Early stop, no more empty tiles in spawn mask")
+                    return False
+
                 empty_tiles = np.argwhere(self.mask == 0)
                 self.walkers[i] = empty_tiles_in_range[np.random.choice(empty_tiles_in_range.shape[0])]
                 tiles_left = empty_tiles.shape[0] - self.min_empty_tiles
@@ -238,7 +244,7 @@ class MaskedDla:
         while self.step():
             iter += 1
             if self.save_vid:
-                if iter % 100 == 0:
+                if iter % 300 == 0:
                     self.write_frame()
             pass
         # grid was used for the mountain IDs, so converting into a mask

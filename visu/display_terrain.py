@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 from PIL import Image
 
 # Load image
-img = Image.open('../dla/results/terrain/masked_terrain_blurred.png').convert('L')
+img = Image.open('dla/results/terrain/dla_terrain_128.png').convert('L')
 Z = np.array(img)
 # Flip the image vertically to match the coordinate system
 Z = np.flipud(Z)
