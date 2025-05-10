@@ -2,10 +2,45 @@ import numpy as np
 from noise import pnoise2
 import sys
 from scipy.ndimage import gaussian_filter, median_filter
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from numba import njit
 from numba.typed import Dict
 from numba import types
+import cv2
+
+def save_timelapse_video(snapshots, seed, fps=30, resolution=(800, 600)):
+    h, w = snapshots[0].shape
+    filename = f"timelapse_3d_{seed}.mp4"
+    out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), fps, resolution)
+
+    x = np.arange(w)
+    y = np.arange(h)
+    X, Y = np.meshgrid(x, y)
+
+    for snap in snapshots:
+        fig = plt.figure(figsize=(resolution[0] / 100, resolution[1] / 100), dpi=100)
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot_surface(X, Y, snap, cmap='terrain', linewidth=0, antialiased=True)
+        ax.set_axis_off()
+        plt.tight_layout()
+
+        # Create canvas and attach it
+        canvas = FigureCanvas(fig)
+        canvas.draw()
+
+        # Use RGBA buffer (safer)
+        img = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+        img = img.reshape(canvas.get_width_height()[::-1] + (4,))[:, :, :3]  # drop alpha
+        plt.close(fig)
+
+        frame = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        out.write(frame)
+
+    out.release()
+    print(f"Saved 3D timelapse video as {filename}")
 
 
 def biome_colormap(heightmap):
@@ -87,13 +122,11 @@ def generate_map_for_erosion(seed, width, height):
 def apply_bilinear_change(map, x, y, delta):
     h, w = map.shape
 
-    #clamp coordinates to stay within valid range
-    x = min(max(x, 0), w - 2)
-    y = min(max(y, 0), h - 2)
-
     #get the integer part of the coordinates
-    x0 = int(x)
-    y0 = int(y)
+    x0 = int(np.floor(x))
+    y0 = int(np.floor(y))
+    x1 = min(x0 + 1, w - 1)
+    y1 = min(y0 + 1, h - 1)
 
     #get the fractional part of the coordinates
     fx = x - x0
@@ -108,9 +141,9 @@ def apply_bilinear_change(map, x, y, delta):
 
     #apply the change with the weights calculated before
     map[y0, x0] += delta * w00
-    map[y0,     x0 + 1] += delta * w10
-    map[y0 + 1, x0    ] += delta * w01
-    map[y0 + 1, x0 + 1] += delta * w11
+    map[y0, x1] += delta * w10
+    map[y1, x0] += delta * w01
+    map[y1, x1] += delta * w11
 
 
 #we use bilinear interpolation to get the height of the terrain at a given the drops position which is floating point
@@ -121,21 +154,19 @@ def bilinear(map, x, y):
     #get map height and width
     h, w = map.shape
 
-    #clamp coordinates to stay within valid range for indexing
-    x = min(max(x, 0), w - 2)
-    y = min(max(y, 0), h - 2)
-
     #integer part of the coordinates
-    x0, y0 = int(x), int(y)
+    x0, y0 = int(np.floor(x)), int(np.floor(y))
+    x1 = min(x0 + 1, w - 1)
+    y1 = min(y0 + 1, h - 1)
 
     #fractional part of the coordinates
     fx, fy = x - x0, y - y0
 
     #get the four nearest grid points
     map00 = map[y0, x0]
-    map01 = map[y0, x0+1]
-    map10 = map[y0+1, x0]
-    map11 = map[y0+1, x0+1]
+    map01 = map[y0, x1]
+    map10 = map[y1, x0]
+    map11 = map[y1, x1]
 
     #interpolate between the top and bottom edges
     top = map00 * (1 - fx) + map01 * fx
@@ -212,7 +243,7 @@ def simulate_droplet(map, p, rng):
         x += x_dir * speed
         y += y_dir * speed
 
-        if (x < 1 or x >= map.shape[1]-2 or y < 1 or y >= map.shape[0]-2):
+        if (x < 1 or x >= map.shape[1]-1 or y < 1 or y >= map.shape[0]-1):
             break
 
         #calculate the new height using bilinear interpolation
@@ -220,18 +251,21 @@ def simulate_droplet(map, p, rng):
         delta_h = height - new_height
 
         #calculate capacity based based on the slop and speed
-        capacity = max(delta_h * speed * volume * capacity_factor, min_slope)
+        slope = max(delta_h, 0.0)
+        if slope < 1e-5:
+            continue
+        capacity = slope * speed * volume * capacity_factor
 
         if sediment > capacity:
             #deposit excess sediment if its over capacity
             deposit = (sediment - capacity) * deposition
-            # deposit = min((sediment - capacity) * deposition, 0.01)
+            deposit = min(deposit, 0.05)
             apply_bilinear_change(map, x, y, deposit)
             sediment -= deposit
         else:
             #erode the terrain if the sediment is under capacity
             erode = (capacity - sediment) * erosion
-            # erode = min((capacity - sediment) * erosion, 0.01, height)
+            erode = min(erode, 0.02, height)
             apply_bilinear_change(map, x, y, -erode)
             sediment += erode
 
@@ -248,16 +282,31 @@ def simulate_droplet(map, p, rng):
 def simulate_erosion(map, params, iterations=50000):
     #simulate erosion on the map given map using the parameters in 'params'
 
+    snapshots = []
+    save_interval = np.floor(iterations / 120)
+
     rng_seeds = np.random.random((iterations, 2))
     for i in range(iterations):
         simulate_droplet(map, params, rng_seeds[i])
 
+        if (i % save_interval == 0):
+            #make a copy of that map and apply some filters to it to smooth it out
+            snap = map.copy()
+            snap = np.clip(snap, 0.0, 1.0)
+            # snap = median_filter(snap, size=3)
+            snap = gaussian_filter(snap, sigma=0.9)
+            # snap = gaussian_filter(snap, sigma=1.2)
+            snap = (snap - snap.min()) / (snap.max() - snap.min())
+            snap = pad_edges(snap)
+            snapshots.append(snap)
+
     map = np.clip(map, 0.0, 1.0)
-    map = median_filter(map, size=3)
-    map = gaussian_filter(map, sigma=1.2)
-    map = gaussian_filter(map, sigma=1.2)
+    # map = median_filter(map, size=3)
+    map = gaussian_filter(map, sigma=0.9)
+    # map = gaussian_filter(map, sigma=1.2)
     map = (map - map.min()) / (map.max() - map.min())
-    return map
+    map = pad_edges(map)
+    return map, snapshots
 
 def export_obj(heightmap, filename="terrain.obj", scale=1.0, height_scale=50.0):
     h, w = heightmap.shape
@@ -288,32 +337,32 @@ params = {
     #droplet inertia
     #high = smooth curves
     #low = sharp turns
-    "inertia": 0.1,
+    "inertia": 0.3,
 
     #sediment capacity factor
     #high = more sediment capacity, less erosion
     #low = less sediment capacity, more erosion
-    "capacity": 0.8,
+    "capacity": 1.2,
 
     #minimum slope to erode
     #high = flat terrain erodes less
     #low = flat terrain erodes more
-    "min_slope": 0.1,
+    "min_slope": 0.02,
 
     #water evaporation factor
     #high = more evaporation, less erosion
     #low = less evaporation, more erosion
-    "evaporation": 0.01,
+    "evaporation": 0.05,
 
     #sediment deposition factor
     #high = more deposition, less erosion
     #low = less deposition, more erosion
-    "deposition": 0.05,
+    "deposition": 0.3,
 
     #sediment erosion factor
     #high = more erosion, less deposition
     #low = less erosion, more deposition
-    "erosion": 0.4,
+    "erosion": 0.1,
 
     #gravity factor
     #high = more gravity, water moves faster downhill
@@ -323,15 +372,15 @@ params = {
     #initial water factor
     #high = more water per droplet, more erosion
     #low = less water per droplet, less erosion
-    "initial_water": 2.0,
+    "initial_water": 1.0,
 
     #initial droplet speed
-    "initial_speed": 1.0,
+    "initial_speed": 0.8,
 
     #maximum number of iterations for each droplet
     #high = more iterations, more erosion
     #low = less iterations, less erosion
-    "max_iterations": 150
+    "max_iterations": 75
 }
 
 #for stronger erosion
@@ -377,14 +426,14 @@ if __name__ == "__main__":
         param_typed[key] = value
 
     #simulate erosion on the map using the parameters in 'params'
-    map = simulate_erosion(map, param_typed, iterations)
-    
-    #remove the edges of the map to avoid artifacts in the final mesh
-    map = pad_edges(map)
+    map, snapshots = simulate_erosion(map, param_typed, iterations)
 
-    #export the map to an obj file
+    #save the timelapse video of the erosion process
+    save_timelapse_video(snapshots, seed)
+    
+    #export the map to an obj and npy file
     export_obj(map, filename=f"terrain_{seed}.obj")
+    np.save(f"terrain_{seed}.npy", map)
 
     #plot the final map using matplotlib
-    np.save(f"terrain_{seed}.npy", map)
     plot_3d(map, seed)
