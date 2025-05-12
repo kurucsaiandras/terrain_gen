@@ -14,8 +14,10 @@ class MaskedDla:
                  num_of_walkers=1,
                  base_mask=None,
                  save_vid=False,
-                 toggle_ranges=True):
+                 toggle_ranges=True,
+                 falloff=None):
         self.toggle_ranges = toggle_ranges # Whether to grow the spawn range if it reaches the edge of the image
+        self.falloff = falloff # Whether to apply a smooth falloff at the end of the 'lines'. Omittable when using a mask that comes from a smooth image
         self.save_vid = save_vid
         if save_vid:
             self.video_writer = None
@@ -38,6 +40,9 @@ class MaskedDla:
             raise ValueError("Start position is not in the mask")
         self.grid[start_pos[:, 0], start_pos[:, 1]] = np.arange(1, len(start_pos)+1)
         self.mask[start_pos[:, 0], start_pos[:, 1]] = 1
+        if falloff is not None:
+            self.falloff_grid = np.zeros((size, size), dtype=float)
+            self.falloff_grid[start_pos[:, 0], start_pos[:, 1]] = 1.0
         self.init_dynamic_masks()
         if allow_diagonals:
             self.directions = np.array([[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [-1, -1], [1, -1], [-1, 1]])
@@ -221,6 +226,8 @@ class MaskedDla:
                     self.movement_mask[tuple(tile)] = 1 # mark as filled
                     self.spawn_mask[tuple(tile)] = 1
                     self.mask[tuple(tile)] = 1 # mark as filled
+                    if self.falloff is not None:
+                        self.falloff_grid[tuple(tile)] = self.falloff_grid[tuple(neighbor)] + 1.0
                     if not self.is_in_range(mountain_id-1, tile): # IDs start from 1 so subtract for indexing
                         if (not self.toggle_ranges) or self.is_range_within_image(mountain_id-1):
                             self.update_movement_mask(mountain_id-1) # update the range of the mountain
@@ -247,9 +254,18 @@ class MaskedDla:
                 if iter % 300 == 0:
                     self.write_frame()
             pass
-        # grid was used for the mountain IDs, so converting into a mask
-        self.grid[self.grid > 0] = 255
-        self.grid = self.grid.astype(np.uint8)
+        mask = self.grid > 0
+        if self.falloff is not None:
+            # we use the falloff grid
+            self.falloff_grid[mask] = (self.falloff_grid.max() + 1.0 - self.falloff_grid[mask]) / self.falloff_grid.max()
+            np.save("falloff_grid_raw.npy", self.falloff_grid)
+            self.falloff_grid[mask] = (1 - 1 / (1 + self.falloff * self.falloff_grid[mask]))
+            self.falloff_grid /= self.falloff_grid.max() # values between 0 and 1
+            self.grid = np.round(self.falloff_grid * 255).astype(np.uint8)
+        else:
+            # grid was used for the mountain IDs, so converting into a mask
+            self.grid[mask] = 255
+            self.grid = self.grid.astype(np.uint8)
         if self.save_vid:
             self.finalize_video()
         if filename:
