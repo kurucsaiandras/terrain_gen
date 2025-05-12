@@ -29,7 +29,7 @@ def combine(cfg: DictConfig):
     for p in generator.parameters():
         p.requires_grad = False
 
-    base_terrain = torchvision.io.read_image("terrain/terrain.png", torchvision.io.ImageReadMode.GRAY).to(torch.float32).to(device)
+    base_terrain = torchvision.io.read_image("terrain/dla_terrain_128_falloff_moreblur.png", torchvision.io.ImageReadMode.GRAY).to(torch.float32).to(device)
     base_terrain -= base_terrain.mean()
     base_terrain /= base_terrain.std()
 
@@ -40,32 +40,26 @@ def combine(cfg: DictConfig):
                 conditions = base_terrain[:,tile_y-1:tile_y+2,tile_x-1:tile_x+2].flatten()
                 condition_map[:, tile_y, tile_x] = conditions
 
-    scale_factor = 64
+    resolution_factor = 16
     terrain: torch.Tensor = torch.nn.functional.interpolate(
         base_terrain.unsqueeze(0),
-        scale_factor=scale_factor,
+        scale_factor=resolution_factor,
         mode='bilinear',    
     ).squeeze(0)
 
     details = torch.empty_like(terrain)
 
     # generate details row by row to have a reasonable batch size
-    for y in range(base_terrain.shape[1] * scale_factor):
-        coords_x = torch.linspace(0.0, base_terrain.shape[2], base_terrain.shape[2] * scale_factor, device=device)
-        coords_y = (y / scale_factor) * torch.ones_like(coords_x, device=device)
+    for y in range(base_terrain.shape[1] * resolution_factor):
+        coords_x = torch.linspace(0.0, base_terrain.shape[2], base_terrain.shape[2] * resolution_factor, device=device)
+        coords_y = (y / resolution_factor) * torch.ones_like(coords_x, device=device)
 
         coords = torch.stack([coords_x, coords_y], dim=1)
         conditions = sample_bilinear(condition_map, coords.unsqueeze(1))
         
-        row = generator(conditions, noise, coords)
+        row = generator(conditions, noise, coords / 8.0)
         details[0,y,:] = row[:,0]
-
-    terrain -= terrain.min()
-    terrain /= terrain.max()
-
-    details -= details.min()
-    details /= details.max()
-
+    
     np.save("terrain/terrain.npy", terrain.cpu().numpy())
     np.save("terrain/details.npy", details.cpu().numpy())
     
