@@ -191,11 +191,12 @@ def plot_noise_transforms(cfg: DictConfig, device = None):
     heights = noise(noise_coords)
 
     fig = plt.figure()
-    ax = fig.subplots(2, 4)
-    for i in range(2):
+    ax = fig.subplots(4, 4)
+    for i in range(4):
         for j in range(4):
             idx = i * 4 + j
             ax[i, j].imshow(heights[...,idx].detach().cpu().numpy(), vmin=-2.0, vmax=2.0)
+            ax[i, j].axis('off')
     fig.tight_layout()
     fig.savefig(f"reports/noise_transforms.pdf")
 
@@ -229,11 +230,11 @@ def all_plots(cfg: DictConfig):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 
     # plot_sample_bilinear()
-    # plot_noise_transforms(cfg, device)
+    plot_noise_transforms(cfg, device)
     # plot_generator_noise_transforms(generator, cfg, device)
-    plot_height_examples(cfg, device)
+    # plot_height_examples(cfg, device)
     # plot_texture_examples(cfg, device)
-    plot_losses(cfg)
+    # plot_losses(cfg)
 
 if __name__ == "__main__":
     all_plots()
