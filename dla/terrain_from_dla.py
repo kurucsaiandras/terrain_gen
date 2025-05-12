@@ -27,10 +27,11 @@ if generate:
                     start_pos=np.array([[SIZE//2, SIZE//2]]),
                     allow_diagonals=False,
                     num_of_walkers=10,
-                    max_filled=0.15)
-    dla_map = dla.generate(f"raw_grid_{SIZE}")
+                    max_filled=0.15,
+                    falloff=2)
+    dla_map = dla.generate(f"raw_grid_{SIZE}_falloff")
 else:
-    dla_map = np.array(Image.open(f"results/dla/raw_grid_{SIZE}.png").convert('L')) / 255
+    dla_map = np.array(Image.open(f"results/dla/raw_grid_{SIZE}_falloff.png").convert('L')) / 255
 dla_map = dla_map.astype(np.float64)
-terrain = multi_scale_blur(dla_map, 50, 1)
-save_terrain(terrain, f"dla_terrain_{SIZE}")
+terrain = multi_scale_blur(dla_map, 100, 1)
+save_terrain(terrain, f"dla_terrain_{SIZE}_falloff_moreblur")
