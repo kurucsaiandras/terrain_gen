@@ -95,22 +95,18 @@ if __name__ == "__main__":
     torch.manual_seed(1234)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 
-    texture = Texture(128, device=device)
-
-    patches = texture.get_batch(8)
+    with rasterio.open("exemplars/wisconsin.tif") as dataset:
+        image = dataset.read(1)
+    
+    image = image[::4,::4]
+    
+    image -= image.min()
+    image /= image.max()
 
     import matplotlib.pyplot as plt
+    import matplotlib.image
 
-    fig = plt.figure()
-    ax = fig.subplots(2, 4)
+    cmap = plt.get_cmap('viridis')
 
-    for i in range(2):
-        for j in range(4):
-            
-            idx = i * 4 + j
-            img =  patches[idx,:,:,:].permute([1, 2, 0]).cpu().numpy()
-            ax[i, j].imshow(img)
-            ax[i, j].axis('off')
-
-    fig.tight_layout()
-    fig.savefig("hej.pdf")
+    image = cmap(image)
+    matplotlib.image.imsave("reports/wisconsin.png", image)

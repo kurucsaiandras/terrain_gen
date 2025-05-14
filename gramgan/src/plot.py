@@ -1,9 +1,11 @@
 import re
 from pathlib import Path
+import json
 
 import torch
 import hydra
 import matplotlib.pyplot as plt
+import matplotlib.image
 from omegaconf import DictConfig
 
 from models import Noise, Generator, Discriminator, NoiseTransforms, sample_bilinear
@@ -23,7 +25,7 @@ def plot_losses(cfg: DictConfig):
     loss_d_std = loss_d.std(dim=1)
     
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=[4, 3])
     ax = fig.subplots()
 
     ax.plot(steps.numpy(), loss_g.numpy(), label="Generator", color='b')
@@ -88,6 +90,63 @@ def plot_texture_examples(cfg: DictConfig, device=None):
 
         fig.tight_layout()
         fig.savefig(f"reports/texture_examples_{cfg.train.name}.pdf")
+
+
+def save_cmapped_image(file: str, img: torch.Tensor):
+    cmap = plt.get_cmap('viridis')
+    img = img.cpu().numpy()
+    img += 4.0
+    img /= 8.0
+    img = cmap(img)
+
+    matplotlib.image.imsave(file, img)
+
+def save_height_examples(cfg: DictConfig, device=None):
+    torch.manual_seed(1234)
+
+    height_map = HeightMap(cfg.model.image_res, device=device) 
+    noise = Noise(cfg.model.noise_features, cfg.model.noise_res, device=device)
+
+    generator = Generator(
+        cfg.model.hidden_features,
+        cfg.model.noise_features,
+        cfg.model.output_features,
+        cfg.model.num_hidden_layers,
+    ).to(device)
+    discriminator = Discriminator(cfg.model.output_features).to(device)
+
+    save_dir: Path = Path("models") / cfg.train.name
+    epoch = sorted(saved_epochs(save_dir))[-1]
+    
+    load_models(
+        save_dir,
+        generator,
+        discriminator,
+        epoch,
+    )
+    generator.eval()
+    discriminator.eval()
+
+    with torch.no_grad():
+        real_patches, conditions = height_map.get_batch(8)
+        fake_patches = generator(conditions, noise, random_patch_coords(8, cfg.model.image_res, device)).permute([0, 3, 1, 2])
+
+        real_logits, _ = discriminator(conditions, real_patches)
+        fake_logits, _ = discriminator(conditions, fake_patches)
+
+    for i in range(8):
+        save_cmapped_image(f"reports/samples_{cfg.train.name}/real_{i}.png", real_patches[i,0,:,:])
+        save_cmapped_image(f"reports/samples_{cfg.train.name}/fake_{i}.png", fake_patches[i,0,:,:])
+
+    with open(f"reports/samples_{cfg.train.name}/logits.json", 'w') as f:
+        json.dump(
+            {
+                "real": real_logits[:,0].cpu().tolist(),
+                "fake": fake_logits[:,0].cpu().tolist(),
+            },
+            f
+        )
+
 
 def plot_height_examples(cfg: DictConfig, device=None):
     torch.manual_seed(1234)
@@ -191,11 +250,12 @@ def plot_noise_transforms(cfg: DictConfig, device = None):
     heights = noise(noise_coords)
 
     fig = plt.figure()
-    ax = fig.subplots(2, 4)
-    for i in range(2):
+    ax = fig.subplots(4, 4)
+    for i in range(4):
         for j in range(4):
             idx = i * 4 + j
             ax[i, j].imshow(heights[...,idx].detach().cpu().numpy(), vmin=-2.0, vmax=2.0)
+            ax[i, j].axis('off')
     fig.tight_layout()
     fig.savefig(f"reports/noise_transforms.pdf")
 
@@ -231,8 +291,9 @@ def all_plots(cfg: DictConfig):
     # plot_sample_bilinear()
     # plot_noise_transforms(cfg, device)
     # plot_generator_noise_transforms(generator, cfg, device)
-    plot_height_examples(cfg, device)
+    # plot_height_examples(cfg, device)
     # plot_texture_examples(cfg, device)
+    save_height_examples(cfg, device)
     plot_losses(cfg)
 
 if __name__ == "__main__":

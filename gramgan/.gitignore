@@ -4,6 +4,8 @@ models/*
 !models/.gitkeep
 reports/*
 !reports/.gitkeep
+terrain/*
+!terrain/.gitkeep
 
 # caches
 src/__pycache__
