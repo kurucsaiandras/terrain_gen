@@ -29,7 +29,9 @@ def combine(cfg: DictConfig):
     for p in generator.parameters():
         p.requires_grad = False
 
-    base_terrain = torchvision.io.read_image("terrain/dla_terrain_128_falloff_moreblur.png", torchvision.io.ImageReadMode.GRAY).to(torch.float32).to(device)
+
+    base_terrain = torch.Tensor(np.load("terrain/dla.npy")).to(device).unsqueeze(0)
+    # base_terrain = torchvision.io.read_image("terrain/dla_terrain_128_falloff_moreblur.png", torchvision.io.ImageReadMode.GRAY).to(torch.float32).to(device)
     base_terrain -= base_terrain.mean()
     base_terrain /= base_terrain.std()
 
