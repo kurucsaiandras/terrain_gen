@@ -1,0 +1,1 @@
+Run `python terrain_from_dla.py` to generate height map and save it as an image.
