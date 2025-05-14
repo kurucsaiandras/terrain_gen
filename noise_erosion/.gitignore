@@ -1,5 +1,6 @@
-#output folders
-timelapses/
-biomes/
-npy/
+timelapses/erosion_from_dla.py
+timelapses/dla_terrain_128_falloff_moreblur.png
+timelapses/dla_terrain_128_falloff.npy
+
+!biomes/*.png
 obj/
